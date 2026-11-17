@@ -1,0 +1,69 @@
+name: patches apply
+
+# Do the patches still apply to their pinned upstream commits, and is the pinned Yuzuri commit still there?
+# Fetches only those commits (no GPU, no build), every push and pull request and once a week.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: pinned commits
+        run: |
+          echo "SGLANG_COMMIT=$(sed -n 's/^SGLANG_COMMIT=\([0-9a-f]*\).*/\1/p' setup.sh)" >> "$GITHUB_ENV"
+          echo "KT_COMMIT=$(sed -n 's/^KT_COMMIT=\([0-9a-f]*\).*/\1/p' setup.sh)" >> "$GITHUB_ENV"
+          echo "YUZURI_COMMIT=$(sed -n 's/^YUZURI_COMMIT=\([0-9a-f]*\).*/\1/p' setup.sh)" >> "$GITHUB_ENV"
+
+      - name: sglang with the model patches
+        run: |
+          git init -q sglang && cd sglang
+          git fetch -q --depth 1 https://github.com/sgl-project/sglang.git "$SGLANG_COMMIT"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SGLANG_COMMIT"
+          for t in ../patches/sglang-v41/[0-9][0-9]-*.patch; do
+            git apply --whitespace=nowarn "$t"
+          done
+
+      - name: SM89 dispatch contracts (CPU only)
+        run: python3 tools/test_sm89_dispatch.py sglang
+
+      - name: llama.cpp MMQ sources (fetched, patched and checked byte for byte)
+        run: |
+          mkdir -p mmq-src/python/sglang/srt/layers/moe/kt_gguf_moe_mmq/llama_mmq
+          git -C mmq-src init -q
+          bash lib/llama-mmq.sh mmq-src llama-mmq-clone
+
+      - name: yuzuri
+        run: |
+          git init -q yuzuri && cd yuzuri
+          git fetch -q --depth 1 https://github.com/05yuki/yuzuri.git "$YUZURI_COMMIT"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$YUZURI_COMMIT"
+          test -f setup.sh && test -f tools/serve.py
+
+      - name: ktransformers and its llama.cpp
+        run: |
+          git init -q kt && cd kt
+          git fetch -q --depth 1 https://github.com/kvcache-ai/ktransformers.git "$KT_COMMIT"
+          git checkout -q FETCH_HEAD
+          for p in kt-kernel-tree kt-kernel-cpu-handoff kt-kernel-expert-cache kt-kernel-gguf \
+                   kt-llamafile-iq2xs kt-llamafile-iquants kt-llamafile-iq4lut kt-kernel-gguf-kernel-guard; do
+            git apply --whitespace=nowarn "../patches/$p.patch"
+          done
+          llama=$(git ls-tree HEAD third_party/llama.cpp | awk '{print $3}')
+          git init -q ../llama && cd ../llama
+          git fetch -q --depth 1 https://github.com/ggerganov/llama.cpp.git "$llama"
+          git checkout -q FETCH_HEAD
+          git apply --check --whitespace=nowarn ../patches/kt-kernel-llama-cpp.patch
+
+      - name: scripts
+        run: |
+          for f in setup.sh serve.sh lib/*.sh tools/*.sh; do bash -n "$f"; done
+          python3 -m py_compile tools/*.py engram-adapter/*.py patches/*.py

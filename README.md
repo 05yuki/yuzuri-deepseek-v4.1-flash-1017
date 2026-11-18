@@ -77,7 +77,7 @@ One request at a time.
 - The two reports are in [reports/](reports/).
 - The first launch of a setup compiles kernels and measures the prefill plan.
 - The prefill prompt is 35,000 token ids drawn at random.
-  Between launches on this machine the two-GPU prefill has been 19 to 22 s.
+  A later launch of the same setup measured 19.2 s on two GPUs.
 - The NLL is over 24 public-domain texts, against the scores of the checkpoint's own `inference/model.py` (`tools/ref-nll.py`).
 - The one-GPU column uses the CPUs of both sockets.
 
@@ -99,13 +99,17 @@ The NVMe drive's random read rate limits the prefill.
 - The engram rows are read from the checkpoint as 4 KiB random reads with `O_DIRECT`.
 - Rows already read stay in an 8 GiB cache in RAM.
 - A prompt of random token ids misses that cache on every row.
-- In one 21.9 s two-GPU prefill of 35,000 tokens, the drive was reading for 15 s, at 107,000 to 147,000 reads a second and 82 to 90% busy.
-- The GPU work of the same prefill was about 11 s.
-- The drive here has no DRAM, and its random read rate falls as the span of the file being read grows: 245,000 reads a second over a 7 GB file, 100,000 to 110,000 over one 101 GB engram shard.
 - One such prompt of 35,000 tokens takes about 1.86 million reads.
+- The drive here has no DRAM, and its random read rate falls as the span of the file being read grows: 249,000 reads a second over a 7 GB file, 143,000 over one 101 GB engram shard.
 - A 35,000-token prompt that needs no reads from the drive (one token repeated) prefills in 17.5 s on two GPUs and 25.7 s on one.
-- The drive therefore adds 2 to 5 s to the two-GPU prefill above (19 to 22 s), and 2 to 4 s on one GPU (27 to 29 s).
+- The drive therefore adds about 2 s to the two-GPU prefill above, and 1 to 2 s on one GPU.
 - 17.5 s and 25.7 s are what a faster drive can approach; no other drive has been measured.
+
+The state of the drive matters as well.
+
+- With this drive 99% full and never trimmed, the rate over the engram shard was 100,000 to 110,000 reads a second.
+- The two-GPU prefill of 35,000 tokens was then 22 s.
+- Freeing space and running `fstrim` on the mount gave the numbers above.
 
 ## Not covered
 

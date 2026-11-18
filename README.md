@@ -55,6 +55,7 @@ The server speaks SGLang's OpenAI-compatible API on `127.0.0.1:8080`.
 - 512 GB of RAM.
 - An x86-64 CPU with AVX2.
 - The checkpoint (476 GiB) on an NVMe drive.
+  Its random read rate limits the prefill; see [Prefill and the drive](#prefill-and-the-drive).
 - Python 3.12, and CUDA 13 wheels from `requirements.txt`.
 
 ## Results
@@ -76,7 +77,6 @@ One request at a time.
 - The two reports are in [reports/](reports/).
 - The first launch of a setup compiles kernels and measures the prefill plan.
 - The prefill prompt is 35,000 token ids drawn at random.
-  Every engram row it needs is a miss, so the time depends on the drive's random read rate.
   Between launches on this machine the two-GPU prefill has been 19 to 22 s.
 - The NLL is over 24 public-domain texts, against the scores of the checkpoint's own `inference/model.py` (`tools/ref-nll.py`).
 - The one-GPU column uses the CPUs of both sockets.
@@ -91,6 +91,21 @@ Decode by kind of text:
 | math | 44.4 tok/s | 33.9 tok/s |
 | JSON | 43.4 tok/s | 32.8 tok/s |
 | Python code | 40.2 tok/s | 31.7 tok/s |
+
+### Prefill and the drive
+
+The NVMe drive's random read rate limits the prefill.
+
+- The engram rows are read from the checkpoint as 4 KiB random reads with `O_DIRECT`.
+- Rows already read stay in an 8 GiB cache in RAM.
+- A prompt of random token ids misses that cache on every row.
+- In one 21.9 s two-GPU prefill of 35,000 tokens, the drive was reading for 15 s, at 107,000 to 147,000 reads a second and 82 to 90% busy.
+- The GPU work of the same prefill was about 11 s.
+- The drive here has no DRAM, and its random read rate falls as the span of the file being read grows: 245,000 reads a second over a 7 GB file, 100,000 to 110,000 over one 101 GB engram shard.
+- One such prompt of 35,000 tokens takes about 1.86 million reads.
+- A 35,000-token prompt that needs no reads from the drive (one token repeated) prefills in 17.5 s on two GPUs and 25.7 s on one.
+- The drive therefore adds 2 to 5 s to the two-GPU prefill above (19 to 22 s), and 2 to 4 s on one GPU (27 to 29 s).
+- 17.5 s and 25.7 s are what a faster drive can approach; no other drive has been measured.
 
 ## Not covered
 

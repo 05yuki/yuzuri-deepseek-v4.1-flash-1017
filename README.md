@@ -65,29 +65,32 @@ One request at a time.
 
 | | two GPUs | one GPU, both sockets |
 |---|---|---|
-| decode, median | 55.9 tok/s | 39.3 tok/s |
-| prefill, 35,000 tokens | 22.1 s (1,587 tok/s) | 28.9 s (1,212 tok/s) |
-| the same prompt again, from the prefix cache | 1.9 s | 2.0 s |
-| server up after | 213 s | 233 s |
-| hot expert slots at the first lend | 854 | 202 |
-| NLL, served minus reference | -0.0045 (SE 0.0042) | -0.0029 (SE 0.0037) |
+| decode, median | 57.0 tok/s | 39.2 tok/s |
+| prefill, 35,000 tokens | 20.1 s (1,744 tok/s) | 27.4 s (1,279 tok/s) |
+| the same prompt again, from the prefix cache | 2.0 s | 2.1 s |
+| server up after, first launch of a setup | 519 s | 354 s |
+| server up after, later launches | 213 s | 233 s |
+| hot expert slots at the first lend | 884 | 212 |
+| NLL, served minus reference | -0.0032 (SE 0.0044) | -0.0006 (SE 0.0036) |
 
+- The two reports are in [reports/](reports/).
+- The first launch of a setup compiles kernels and measures the prefill plan.
 - The prefill prompt is 35,000 token ids drawn at random.
   Every engram row it needs is a miss, so the time depends on the drive's random read rate.
-  On this drive, 15 of the 22 seconds are spent reading engram rows.
+  Between launches on this machine the two-GPU prefill has been 19 to 22 s.
 - The NLL is over 24 public-domain texts, against the scores of the checkpoint's own `inference/model.py` (`tools/ref-nll.py`).
 - The one-GPU column uses the CPUs of both sockets.
 
-Decode by kind of text, two GPUs:
+Decode by kind of text:
 
-| text | tok/s |
-|---|---|
-| Chinese prose | 47.1 |
-| English prose | 43.1 |
-| English technical prose | 38.9 |
-| math | 43.8 |
-| JSON | 42.2 |
-| Python code | 39.1 |
+| text | two GPUs | one GPU, both sockets |
+|---|---|---|
+| Chinese prose | 50.6 tok/s | 35.1 tok/s |
+| English prose | 45.3 tok/s | 33.9 tok/s |
+| English technical prose | 40.1 tok/s | 32.2 tok/s |
+| math | 44.4 tok/s | 33.9 tok/s |
+| JSON | 43.4 tok/s | 32.8 tok/s |
+| Python code | 40.2 tok/s | 31.7 tok/s |
 
 ## Not covered
 

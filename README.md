@@ -10,24 +10,19 @@ Run [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/De
 
 ## What is in here
 
-SGLang is the public commit `8c7ec052` plus five patches.
-The five patches change the model's own files: `deepseek_v4.py`, its attention kernels and its KV pool.
+SGLang is the public commit `8c7ec052` plus six patches.
+The six patches change the model's own files: `deepseek_v4.py`, its attention kernels and its KV pool.
 Nothing else in SGLang is patched.
 Everything else that the launch needs comes from Yuzuri's hooks at startup.
 
 | piece | where it comes from |
 |---|---|
-| SGLang | main at `8c7ec052`, with `patches/sglang-v41/` (five patches) |
+| SGLang | main at `8c7ec052`, with `patches/sglang-v41/` (six patches) |
 | kt-kernel | KTransformers `95009ea`, with `patches/kt-*.patch` |
 | Yuzuri | a pinned commit of [05yuki/yuzuri](https://github.com/05yuki/yuzuri), fetched by `setup.sh` |
 | engram row store | `engram-adapter/`, built by `setup.sh` |
 
 [docs/patches.md](docs/patches.md) lists every patch and its switch.
-
-The same model also runs from
-[deepseek-v4.1-flash-1017-ktransformers](https://github.com/05yuki/deepseek-v4.1-flash-1017-ktransformers),
-which carries its whole stack as patches against SGLang.
-This repository is the other arrangement: the model's patches here, the rest in Yuzuri.
 
 ## Quick start
 
@@ -39,7 +34,7 @@ MODEL=/models/dsv41-1017 ./serve.sh
 
 - `setup.sh` builds everything inside this directory.
   Re-running it skips the finished steps.
-- `PREBUILT=<archive> ./setup.sh` uses the release archive of deepseek-v4.1-flash-1017-ktransformers and skips the kt-kernel build.
+- `PREBUILT=<archive> ./setup.sh` installs kt-kernel from the archive on this repository's [release page](https://github.com/05yuki/yuzuri-deepseek-v4.1-flash-1017/releases) and skips its build.
   Without it, the build needs a system CUDA 13 toolkit.
 - `serve.sh` starts one tensor-parallel rank per visible GPU.
   `CUDA_VISIBLE_DEVICES` picks the GPUs.
@@ -47,39 +42,73 @@ MODEL=/models/dsv41-1017 ./serve.sh
 
 The server speaks SGLang's OpenAI-compatible API on `127.0.0.1:8080`.
 `SGLANG_HOST=0.0.0.0` serves other machines; set `SGLANG_API_KEY` with it.
+Tool calls arrive in `message.tool_calls` and thinking in `reasoning_content`.
+Thinking is off unless a request sets `"chat_template_kwargs": {"thinking": true}`.
+
+## Documents
+
+| document | what it covers |
+|---|---|
+| [docs/requirements.md](docs/requirements.md) | RAM, GPU, disk, software, host settings |
+| [docs/setup.md](docs/setup.md) | what `setup.sh` and `serve.sh` do, their variables, the prebuilt archive |
+| [docs/serving.md](docs/serving.md) | the API, the prefix cache, tool calls and thinking |
+| [docs/patches.md](docs/patches.md) | every patch and its switch |
+| [docs/features.md](docs/features.md) | each Yuzuri feature, and the launch without it |
+| [docs/gguf.md](docs/gguf.md) | serving a GGUF pack, with its numbers |
+| [docs/model.md](docs/model.md) | what 1017 changes against the earlier release, and how it is run here |
+| [docs/kv-cache.md](docs/kv-cache.md) | V4.1's KV formats, and the KV pool past the GPU |
+| [docs/sm89.md](docs/sm89.md) | the attention fallback for RTX 40 |
+| [docs/qualification.md](docs/qualification.md) | `tools/qualify.sh`, the NLL check, the tests |
+| [docs/glossary.md](docs/glossary.md) | the words used here |
 
 ## Requirements
 
 - An NVIDIA GPU of 16 GB, SM120 (RTX 50).
   SM89 (RTX 40) is selected by `03-sm89-attention` but has not been run with this repository.
 - 512 GB of RAM.
+  The server uses about 420 GiB.
 - An x86-64 CPU with AVX2.
 - The checkpoint (476 GiB) on an NVMe drive.
   Its random read rate limits the prefill; see [Prefill and the drive](#prefill-and-the-drive).
-- Python 3.12, and CUDA 13 wheels from `requirements.txt`.
+- Python 3.12, and CUDA 13 wheels from `requirements.txt` (torch 2.14.1, FlashInfer 0.7.4).
+
+Three host settings are recommended, set as root.
+
+- `echo advise > /sys/kernel/mm/transparent_hugepage/shmem_enabled`
+- `vm.min_free_kbytes = 8388608`
+- Swap off.
+
+[docs/requirements.md](docs/requirements.md) says what each one is for.
 
 ## Results
 
 Measured by `tools/qualify.sh` on 2 x EPYC 7452 (2 x 32 cores), 499 GiB of RAM and RTX 5070 Ti 16 GB cards on PCIe 4.0 x16.
 The checkpoint is on a WD Blue SN5100 2TB.
+The software is Ubuntu 26.04, driver 595.91.07, torch 2.14.1 + cu130, FlashInfer 0.7.4 and CUDA toolkit 13.1.
 One request at a time.
 
-| | two GPUs | one GPU, both sockets |
-|---|---|---|
-| decode, median | 57.0 tok/s | 39.2 tok/s |
-| prefill, 35,000 tokens | 20.1 s (1,744 tok/s) | 27.4 s (1,279 tok/s) |
-| the same prompt again, from the prefix cache | 2.0 s | 2.1 s |
-| server up after, first launch of a setup | 519 s | 354 s |
-| server up after, later launches | 213 s | 233 s |
-| hot expert slots at the first lend | 884 | 212 |
-| NLL, served minus reference | -0.0032 (SE 0.0044) | -0.0006 (SE 0.0036) |
+| | two GPUs | one GPU, both sockets | one GPU, one socket |
+|---|---|---|---|
+| decode, Japanese prose, median of four prompts | 57.0 tok/s | 39.2 tok/s | 24.1 tok/s |
+| prefill, 35,000 tokens | 20.1 s (1,744 tok/s) | 27.4 s (1,279 tok/s) | 42.2 s (830 tok/s) |
+| the same prompt again, from the prefix cache | 2.0 s | 2.1 s | 5.4 s |
+| server up after, first launch of a setup | 519 s | 354 s | |
+| server up after, later launches | 213 s | 233 s | 217 s |
+| hot expert slots at the first lend | 884 | 212 | 215 |
+| NLL, served | 0.7153 | 0.7180 | 0.7167 |
+| NLL, served minus reference | -0.0032 (SE 0.0044) | -0.0006 (SE 0.0036) | -0.0018 (SE 0.0048) |
 
-- The two reports are in [reports/](reports/).
+- The three reports are in [reports/](reports/).
 - The first launch of a setup compiles kernels and measures the prefill plan.
 - The prefill prompt is 35,000 token ids drawn at random.
   A later launch of the same setup measured 19.2 s on two GPUs.
+- Each decode reply is 1,024 tokens.
 - The NLL is over 24 public-domain texts, against the scores of the checkpoint's own `inference/model.py` (`tools/ref-nll.py`).
-- The one-GPU column uses the CPUs of both sockets.
+- The reference's mean NLL is 0.7185.
+- The second column uses the CPUs of both sockets.
+- The third column is the server under `numactl -N 0 -m 0` with one GPU visible: 32 cores and 251 GiB of RAM.
+  The experts that do not fit in that RAM are read from the drive.
+- A node of this two-socket machine is not a single-socket machine with more RAM.
 
 Decode by kind of text:
 
@@ -91,6 +120,17 @@ Decode by kind of text:
 | math | 44.4 tok/s | 33.9 tok/s |
 | JSON | 43.4 tok/s | 32.8 tok/s |
 | Python code | 40.2 tok/s | 31.7 tok/s |
+
+### Long prompts
+
+One prompt of random token ids, sent to a server that has just come up.
+
+| prompt | two GPUs | one GPU, both sockets |
+|---|---|---|
+| 65,536 tokens | | 51.7 s (1,268 tok/s) |
+| 131,072 tokens | 62.5 s (2,096 tok/s) | 102.8 s (1,275 tok/s) |
+| 524,288 tokens | 328.6 s (1,596 tok/s) | 653.6 s (802 tok/s) |
+| 1,000,000 tokens | 484.6 s (2,063 tok/s) | 837.7 s (1,194 tok/s) |
 
 ### Prefill and the drive
 
@@ -114,7 +154,7 @@ The state of the drive matters as well.
 ## Not covered
 
 - More than one request at a time has not been measured.
-- GGUF packs and the one-socket, 256 GB launch are in deepseek-v4.1-flash-1017-ktransformers, not here.
+- An SM89 GPU has not been run with this repository.
 
 ## License
 

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Build everything serve.sh needs, inside this directory.
 #
-#   [MODEL=<checkpoint dir>] [PREBUILT=<archive or directory>] ./setup.sh
+#   [MODEL=<checkpoint dir>] [GGUF=<GGUF pack dir> [BASE=<dir with the model's config and tokenizer>]]
+#   [PREBUILT=<archive or directory>] ./setup.sh
 #
-# 1. SGLang at SGLANG_COMMIT with the five model patches of patches/sglang-v41/ (nothing else is changed in it);
+# 1. SGLang at SGLANG_COMMIT with the six model patches of patches/sglang-v41/ (nothing else is changed in it);
 # 2. kt-kernel at KT_COMMIT with patches/kt-*.patch, built here, or the wheel of a PREBUILT archive;
 # 3. a Python 3.12 venv (.venv) from requirements.txt;
 # 4. the engram row store (engram-adapter/librow_store.so);
 # 5. Yuzuri at YUZURI_COMMIT (third_party/yuzuri), attached to the venv by its own setup.sh --package.
-# Re-running skips the finished steps. PREBUILT is the release archive of
-# deepseek-v4.1-flash-1017-ktransformers (the same kt-kernel and MMQ builds); without it kt-kernel's CMake
+# Re-running skips the finished steps. PREBUILT is the archive on this repository's release page
+# (kt-kernel and the MMQ kernels, built); without it kt-kernel's CMake
 # build needs a system CUDA 13 toolkit.
 set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +18,7 @@ cd "$here"
 SGLANG_COMMIT=8c7ec05287904d88854d9fb5bcbe1a5181282b5e
 KT_COMMIT=95009ea6856c0799e517e93cb12be5e8494bc7ce
 YUZURI_REPO="${YUZURI_REPO:-https://github.com/05yuki/yuzuri.git}"
-YUZURI_COMMIT=303e487905131d4b668fb8f21d449e51b3eb14c5
+YUZURI_COMMIT=cc71313cd8a84de5ed04f62b5719989c7887f750
 sglang_patches=()
 for f in "$here"/patches/sglang-v41/[0-9][0-9]-*.patch; do sglang_patches+=("sglang-v41/$(basename "$f")"); done
 kt_patches=(kt-kernel-tree.patch kt-kernel-cpu-handoff.patch kt-kernel-expert-cache.patch kt-kernel-gguf.patch
@@ -221,7 +222,28 @@ if [[ -n "${MODEL:-}" ]]; then
   "$py" tools/make-engram-manifest.py "$MODEL" "state/engram-$(basename "$MODEL")"
 fi
 
+if [[ -n "${GGUF:-}" ]]; then
+  # a GGUF pack of the model (llama.cpp's "deepseek41" layout): a config directory with no weights, and the engram
+  # manifest over the pack's own Engram rows
+  gguf_dir="$(cd "$GGUF" && pwd)"
+  out="state/gguf-$(basename "$gguf_dir")"
+  step "SGLang config for $gguf_dir"
+  if [[ ! -f "$out/config/config.json" ]]; then
+    base="${BASE:-${MODEL:-}}"
+    if [[ -z "$base" ]]; then
+      # the base model's config, tokenizer and chat encoding only
+      base="state/base-DeepSeek-V4.1-Flash-1017"
+      "$here/.venv/bin/hf" download deepseek-ai/DeepSeek-V4.1-Flash-1017 --local-dir "$base" \
+        --include config.json --include tokenizer.json --include tokenizer_config.json \
+        --include "encoding/*" --include "inference/*"
+    fi
+    "$py" tools/make-gguf-config.py "$base" "$out/config"
+  fi
+  step "engram manifest for $gguf_dir"
+  [[ -f "$out/engram/engram-manifest.json" ]] || "$py" tools/make-engram-manifest-gguf.py "$gguf_dir" "$out/engram"
+fi
+
 step "check: the attention-output FP8 kernel on this GPU"
 "$py" tools/dsv4-o-fp8-qdq-test.py ${MODEL:+"$MODEL"} 2>&1 | grep -v -i warn | tail -3
 
-printf '\nDone. Start the server with: MODEL=<checkpoint dir> ./serve.sh\n'
+printf '\nDone. Start the server with: MODEL=<checkpoint dir> ./serve.sh   (a GGUF pack: GGUF=<dir> ./serve.sh)\n'

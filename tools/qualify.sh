@@ -21,7 +21,16 @@
 # path, address or serial number. Exit status 0 when every check passed.
 set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[[ -n "${MODEL:-}" ]] || { echo "set MODEL to the checkpoint directory" >&2; exit 2; }
+# a GGUF pack: the config directory setup.sh wrote for it holds the tokenizer
+if [[ -n "${GGUF:-}" ]]; then
+  src="$(cd "$GGUF" && pwd)"
+  tok="$here/state/gguf-$(basename "$src")/config"
+  [[ -f "$tok/tokenizer.json" ]] || { echo "run GGUF=$GGUF ./setup.sh first" >&2; exit 2; }
+else
+  [[ -n "${MODEL:-}" ]] || { echo "set MODEL to the checkpoint directory (or GGUF to a GGUF pack)" >&2; exit 2; }
+  src="$(cd "$MODEL" && pwd)"
+  tok="$src"
+fi
 port="${SGLANG_PORT:-8080}"
 url="http://127.0.0.1:$port"
 py="$here/.venv/bin/python"
@@ -31,7 +40,7 @@ tol="${QUALIFY_NLL_TOL:-0.01}"
 ref="${QUALIFY_REF:-$here/tools/nll-ref-1017.json}"
 
 # what may name the machine, replaced in everything the report quotes
-scrub_args=(-e "s#$(cd "$MODEL" && pwd)#<model>#g" -e "s#$here#<repo>#g" -e "s#$HOME#~#g")
+scrub_args=(-e "s#$src#<model>#g" -e "s#$here#<repo>#g" -e "s#$HOME#~#g")
 for name in "$(hostname)" "$(id -un)"; do  # names short enough to be common words stay
   (( ${#name} >= 3 )) && scrub_args+=(-e "s#$name#<name>#g")
 done
@@ -68,7 +77,7 @@ else
 fi
 
 echo "NLL"
-if URL="$url" "$py" "$here/tools/nll.py" score "$MODEL" "$work/served.json" > "$work/nll.out" 2>&1; then
+if URL="$url" "$py" "$here/tools/nll.py" score "$tok" "$work/served.json" > "$work/nll.out" 2>&1; then
   "$py" "$here/tools/nll.py" compare "$ref" "$work/served.json" > "$work/nll-cmp.out"
   diff_line="$(grep -a "minus" "$work/nll-cmp.out" || true)"
   d="$(sed -n 's/.*: \([-+][0-9.]*\) nats a token.*/\1/p' <<< "$diff_line")"
@@ -138,7 +147,7 @@ nvcc="$( { [[ -n "$nvcc_bin" ]] && "$nvcc_bin" --version; } 2>/dev/null | sed -n
 recipe="$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo "not a git checkout")"
 sglang="$(sed -n 's/^SGLANG_COMMIT=\([0-9a-f]\{8\}\).*/\1/p' "$here/setup.sh")"
 yuzuri="$(sed -n 's/^YUZURI_COMMIT=\([0-9a-f]\{7\}\).*/\1/p' "$here/setup.sh")"
-index_sha="$(sha256sum "$MODEL/model.safetensors.index.json" 2>/dev/null | cut -c1-12)"
+index_sha="$(sha256sum "$src/model.safetensors.index.json" 2>/dev/null | cut -c1-12)"
 
 {
   echo "# Qualification report"
@@ -152,7 +161,7 @@ index_sha="$(sha256sum "$MODEL/model.safetensors.index.json" 2>/dev/null | cut -
   echo "- RAM: $ram GiB"
   echo "- OS: $os"
   echo "- $sw; CUDA toolkit ${nvcc:-none found}"
-  echo "- checkpoint: model.safetensors.index.json sha256 \`${index_sha:-missing}\`"
+  if [[ -n "${GGUF:-}" ]]; then echo "- GGUF pack: \`$(basename "$src")\`"; else echo "- checkpoint: model.safetensors.index.json sha256 \`${index_sha:-missing}\`"; fi
   echo
   echo "## Checks"
   echo

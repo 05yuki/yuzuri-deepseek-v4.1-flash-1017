@@ -9,7 +9,7 @@ Checks, each with the model card's sampling (temperature 1.0, top_p 1.0):
   result     the call and its result sent back: the next turn answers in content
   namespace  a tool declared with a namespace: the call carries the bare name and the
              namespace, as V4.1's reference encoding renders it. A known gap on SGLang main since
-             #45315 (deepseek-recipe ignores namespaces, docs/patches.md): reported, not counted
+             #45315 (deepseek-recipe ignores namespaces, docs/model.md): reported, not counted
   thinking   thinking on (chat_template_kwargs): reasoning_content and the call both arrive
 
 Needs the server started with --tool-call-parser deepseekv41 and --reasoning-parser
@@ -70,7 +70,7 @@ results = []
 
 def check(name, ok, detail, known_gap=False):
     if known_gap and not ok:
-        print(f"GAP  {name}: {detail} (known, docs/patches.md)")
+        print(f"GAP  {name}: {detail} (known, docs/model.md)")
         return
     results.append(ok)
     print(f"{'ok  ' if ok else 'FAIL'} {name}: {detail}")

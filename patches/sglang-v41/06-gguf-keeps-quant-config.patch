@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: 05yuki <ceu.azul.samu@gmail.com>
+Date: Wed, 18 Nov 2026 13:20:00 +0900
+Subject: [PATCH] gguf-keeps-quant-config: wo_a and the embedding keep a GGUF
+ pack's quantization config
+
+`wo_a` and the token embedding of DeepSeek V4 drop the quantization config
+unless it is an expert pack's. A GGUF pack's tensors need theirs as well:
+without it the layers are built as plain bf16 and the GGUF bytes do not load.
+---
+--- a/python/sglang/srt/models/deepseek_v4.py
++++ b/python/sglang/srt/models/deepseek_v4.py
+@@ -1160,7 +1160,7 @@
+         quantize_wo_a = fp8 or self.use_npu_arch35_mxfp8_wo_a
+         if wo_a_keeps_quant_config is None:
+             keep_source_quant = (
+-                quant_config is not None and quant_config.get_name() == "expert_pack"
++                quant_config is not None and quant_config.get_name() in ("expert_pack", "gguf")
+             )
+             wo_a_quant_config: Optional[QuantizationConfig] = (
+                 quant_config if quantize_wo_a or keep_source_quant else None
+@@ -4019,7 +4019,7 @@
+         if self.pp_group.is_first_rank:
+             embedding_quant_config = (
+                 quant_config
+-                if quant_config is not None and quant_config.get_name() == "expert_pack"
++                if quant_config is not None and quant_config.get_name() in ("expert_pack", "gguf")
+                 else None
+             )
+             self.embed_tokens = VocabParallelEmbedding(

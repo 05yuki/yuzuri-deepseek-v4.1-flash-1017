@@ -1,7 +1,8 @@
-diff -ruN a/third_party/llamafile/iqk_mul_mat.inc b/third_party/llamafile/iqk_mul_mat.inc
+diff --git a/third_party/llamafile/iqk_mul_mat.inc b/third_party/llamafile/iqk_mul_mat.inc
+index 4897f08..e2b70e7 100644
 --- a/third_party/llamafile/iqk_mul_mat.inc
 +++ b/third_party/llamafile/iqk_mul_mat.inc
-@@ -2845,6 +2845,157 @@
+@@ -2845,6 +2845,157 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
      const __m256i shuffle = _mm256_set_epi32(7, 5, 3, 1, 7, 5, 3, 1);
  };
  
@@ -159,7 +160,7 @@ diff -ruN a/third_party/llamafile/iqk_mul_mat.inc b/third_party/llamafile/iqk_mu
  /*
  moonll
  add Q8_0_Unpacker && DequantizerIQ2XXS support
-@@ -2873,7 +3024,7 @@
+@@ -2873,7 +3024,7 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
              m.funcs[6] = mul_mat_qX_1_q8_1_T<Dequantizer, 7>;
              m.funcs[7] = mul_mat_qX_1_q8_1_T<Dequantizer, 8>;
          }
@@ -168,7 +169,7 @@ diff -ruN a/third_party/llamafile/iqk_mul_mat.inc b/third_party/llamafile/iqk_mu
              m.funcs[0] = mul_mat_qX_K_q8_K_IQ<Dequantizer, 1>;
              m.funcs[1] = mul_mat_qX_K_q8_K_IQ<Dequantizer, 2>;
              m.funcs[2] = mul_mat_qX_K_q8_K_IQ<Dequantizer, 3>;
-@@ -3180,6 +3331,65 @@
+@@ -3180,6 +3331,65 @@ add IQ1_S
  add GGML_TYPE_IQ4_XS
  */
  
@@ -234,7 +235,7 @@ diff -ruN a/third_party/llamafile/iqk_mul_mat.inc b/third_party/llamafile/iqk_mu
  bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
      (void)Ny;
  
-@@ -3213,6 +3423,11 @@
+@@ -3213,6 +3423,11 @@ bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
              assert (ne00 % QK_K == 0);
              MulMat::set_functions<DequantizerIQ2XXS>(mm);
              break;
@@ -246,7 +247,7 @@ diff -ruN a/third_party/llamafile/iqk_mul_mat.inc b/third_party/llamafile/iqk_mu
          case GGML_TYPE_Q4_0:
              assert (ne00 % QK4_0 == 0);
              MulMat::set_functions<Q4_0_Unpacker>(mm);
-@@ -3243,6 +3458,18 @@
+@@ -3243,6 +3458,18 @@ bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
              expected_typeB = GGML_TYPE_Q8_0_X4;
  #endif
              break;

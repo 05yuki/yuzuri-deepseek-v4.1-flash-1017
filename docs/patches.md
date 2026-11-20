@@ -25,7 +25,7 @@ This repository has not been run on an SM89 GPU.
 
 ## KTransformers: kt-kernel (`patches/kt-*.patch`)
 
-They are applied to KTransformers `95009ea` and its llama.cpp submodule.
+They are applied to KTransformers `ca198c5` and its llama.cpp submodule.
 A prebuilt archive holds the same build ([setup.md](setup.md#prebuilt-pieces)).
 
 | patch | what it does |

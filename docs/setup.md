@@ -7,7 +7,7 @@
 ```
 
 1. Clones sgl-project/sglang at `401d0c79` and applies the six patches of `patches/sglang-v41/`.
-2. Clones kvcache-ai/ktransformers at `95009ea` with its llama.cpp and pybind11 submodules, and applies `patches/kt-*.patch`.
+2. Clones kvcache-ai/ktransformers at `ca198c5` with its llama.cpp and pybind11 submodules, and applies `patches/kt-*.patch`.
 3. Creates `.venv` (Python 3.12) from `requirements.txt` and installs the patched SGLang in place.
 4. Chooses the CUDA toolkit for the kernels compiled at run time: the system's when it is usable, otherwise NVIDIA's wheels under `build/`.
 5. Builds kt-kernel for this CPU and the visible GPUs' compute capability, or installs the wheel of a prebuilt archive.
@@ -47,7 +47,7 @@ Headers and libraries outside the system paths go in through `CPLUS_INCLUDE_PATH
 - It holds kt-kernel with six CPU variants (AVX2, AVX-512 base / VNNI / VBMI / BF16, AMX); one is picked at import.
 - It holds the streamed prefill's MMQ extension for GPU archs sm89, sm90, sm100 and sm120.
 - It holds the engram row store and hwloc.
-- It is built from KTransformers `95009ea` with the patches of this repository, on Ubuntu 24.04, so it runs on glibc 2.39 and later.
+- It is built from KTransformers `ca198c5` with the patches of this repository, on Ubuntu 24.04, so it runs on glibc 2.39 and later.
 - It is for the pinned torch (`requirements.txt`) and Python 3.12.
 - Its `manifest.json` names the pinned trees, the torch, CUDA and Python versions and every file's SHA-256; `setup.sh` checks them all.
 - With it, nothing of kt-kernel is built at setup, and no system CUDA toolkit is needed.

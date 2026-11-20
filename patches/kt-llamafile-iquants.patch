@@ -1,3 +1,5 @@
+diff --git a/third_party/llamafile/iqk_mul_mat.inc b/third_party/llamafile/iqk_mul_mat.inc
+index e2b70e7..13b16bd 100644
 --- a/third_party/llamafile/iqk_mul_mat.inc
 +++ b/third_party/llamafile/iqk_mul_mat.inc
 @@ -21,6 +21,7 @@
@@ -8,7 +10,7 @@
  #include <type_traits>
  #if defined __x86_64__ || defined __aarch64__ || defined(_M_X64)
  
-@@ -997,6 +998,26 @@
+@@ -997,6 +998,26 @@ const uint64_t keven_signs[128] = {
  add typeB and strideB
  }*/
  
@@ -35,7 +37,7 @@
  bool iqk_mul_mat(long Nx, long Ny, long ne00,
      int typeA, const void * A, long strideA,
      int typeB, const void * B, long strideB,
-@@ -1004,12 +1025,17 @@
+@@ -1004,12 +1025,17 @@ bool iqk_mul_mat(long Nx, long Ny, long ne00,
  
          MulMat mm;
      
@@ -55,10 +57,11 @@
        
          
          auto nrc_x = (Nx + nth - 1)/nth;
-@@ -2997,11 +3023,447 @@
+@@ -2996,12 +3022,448 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
+ 
  };
  
- /*
++/*
 + * x86 kernels for the i-quants the vendored table lacked (IQ2_XS, IQ2_S, IQ3_XXS,
 + * IQ3_S), for IQ4_NL (32-block, Q8_0 activations) and for Q2_0 (ggml type 42,
 + * 64-block ternary-plus-one, Q8_0 activations). The four dequantizers and
@@ -426,7 +429,7 @@
 +}
 +
 +
-+/*
+ /*
  moonll
  add Q8_0_Unpacker && DequantizerIQ2XXS support
  add func mul_mat_qX_K_q8_K_IQ
@@ -503,7 +506,7 @@
  template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
      if constexpr (std::is_same_v<Dequantizer, Q4_0_Unpacker> || std::is_same_v<Dequantizer, Q5_0_Unpacker> ||
          std::is_same_v<Dequantizer, Q8_0_Unpacker>) {
-@@ -3024,7 +3486,41 @@
+@@ -3024,7 +3486,41 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
              m.funcs[6] = mul_mat_qX_1_q8_1_T<Dequantizer, 7>;
              m.funcs[7] = mul_mat_qX_1_q8_1_T<Dequantizer, 8>;
          }
@@ -546,7 +549,7 @@
              m.funcs[0] = mul_mat_qX_K_q8_K_IQ<Dequantizer, 1>;
              m.funcs[1] = mul_mat_qX_K_q8_K_IQ<Dequantizer, 2>;
              m.funcs[2] = mul_mat_qX_K_q8_K_IQ<Dequantizer, 3>;
-@@ -3417,7 +3913,11 @@
+@@ -3417,7 +3913,11 @@ bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
              break;
          case GGML_TYPE_IQ4_XS:
              assert (ne00 % QK_K == 0);
@@ -558,7 +561,7 @@
              break;
          case GGML_TYPE_IQ2_XXS:
              assert (ne00 % QK_K == 0);
-@@ -3428,6 +3928,28 @@
+@@ -3428,6 +3928,28 @@ bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
              assert (ne00 % QK_K == 0);
              MulMat::set_functions<DequantizerIQ2XS>(mm);
              break;

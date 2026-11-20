@@ -16,9 +16,9 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$here"
 SGLANG_COMMIT=401d0c792902115eac9a2ae62e6e11ead80677f0
-KT_COMMIT=95009ea6856c0799e517e93cb12be5e8494bc7ce
+KT_COMMIT=ca198c50de70abb6827ba6f573bb6671e54436e2
 YUZURI_REPO="${YUZURI_REPO:-https://github.com/05yuki/yuzuri.git}"
-YUZURI_COMMIT=f42fded3bba3887c00c3151af47c0955f41aa84d
+YUZURI_COMMIT=264516781c879ee2ea500ff658bf4b34480228ab
 sglang_patches=()
 for f in "$here"/patches/sglang-v41/[0-9][0-9]-*.patch; do sglang_patches+=("sglang-v41/$(basename "$f")"); done
 kt_patches=(kt-kernel-tree.patch kt-kernel-cpu-handoff.patch kt-kernel-expert-cache.patch kt-kernel-gguf.patch
@@ -67,6 +67,10 @@ if ! built_as third_party/ktransformers/.yuzuri-1017-patched "$kt_variant"; then
   git -C third_party/ktransformers/third_party/llama.cpp clean -fdq
   for p in "${kt_patches[@]}"; do apply_checked third_party/ktransformers "$here/patches/$p"; done
   apply_checked third_party/ktransformers/third_party/llama.cpp "$here/patches/kt-kernel-llama-cpp.patch"
+  # kt-kernel's CMake applies its own two llama.cpp patches and stops on a tree that has more than them;
+  # kt-kernel-llama-cpp.patch holds both and the GGUF types of this recipe, so the two files go
+  rm third_party/ktransformers/kt-kernel/third_party_patches/llama.cpp/0001-ggml-mxfp4-type.patch \
+     third_party/ktransformers/kt-kernel/third_party_patches/llama.cpp/0002-gguf-numpy2-byteorder.patch
   echo "$kt_variant" > third_party/ktransformers/.yuzuri-1017-patched
 fi
 
@@ -146,6 +150,9 @@ if m["torch"] != want:
     sys.exit(f"prebuilt is for torch {m['torch']}, requirements.txt pins {want}")
 if platform.python_version().rsplit(".", 1)[0] != m["python"].rsplit(".", 1)[0]:
     sys.exit(f"prebuilt is for Python {m['python']}, this is {platform.python_version()}")
+kt = [l.split("=")[1].strip() for l in open("setup.sh") if l.startswith("KT_COMMIT=")][0]
+if m["pins"]["ktransformers"] != kt:
+    sys.exit(f"prebuilt holds kt-kernel of KTransformers {m['pins']['ktransformers'][:8]}, setup.sh pins {kt[:8]}")
 print(f"recipe {m['recipe']}, torch {m['torch']}, CUDA {m['cuda']}, GPU archs {' '.join(m['gpu_archs'])}, "
       f"{len(m['files'])} files verified")
 PY

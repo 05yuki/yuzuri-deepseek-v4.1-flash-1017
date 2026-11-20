@@ -1,6 +1,8 @@
---- a/third_party/llamafile/iqk_mul_mat.inc	2026-11-10 10:17:49.800561308 +0900
-+++ b/third_party/llamafile/iqk_mul_mat.inc	2026-11-10 10:17:49.803465429 +0900
-@@ -3462,6 +3462,88 @@
+diff --git a/third_party/llamafile/iqk_mul_mat.inc b/third_party/llamafile/iqk_mul_mat.inc
+index 13b16bd..16142f2 100644
+--- a/third_party/llamafile/iqk_mul_mat.inc
++++ b/third_party/llamafile/iqk_mul_mat.inc
+@@ -3462,6 +3462,88 @@ static void mul_mat_iq4xs_q8_K_signed(int n, const void * vx, size_t bx, const D
          for (int iy = 0; iy < nrc_y; ++iy) info.store(ix, iy, hsum_float_8(accd[iy]));
      }
  }
@@ -89,7 +91,7 @@
  #endif  // !HAVE_FANCY_SIMD
  
  template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
-@@ -3497,6 +3579,16 @@
+@@ -3497,6 +3579,16 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
              m.funcs[7] = mul_mat_iq4_nl_q8_0_T<8>;
          }
  #ifndef HAVE_FANCY_SIMD
@@ -106,7 +108,7 @@
          else if constexpr (std::is_same_v<Dequantizer, DequantizerIQ4XS_Signed>) {
              m.funcs[0] = mul_mat_iq4xs_q8_K_signed<1>;
              m.funcs[1] = mul_mat_iq4xs_q8_K_signed<2>;
-@@ -3940,6 +4032,18 @@
+@@ -3940,6 +4032,18 @@ bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
              assert (ne00 % QK_K == 0);
              MulMat::set_functions<DequantizerIQ3S>(mm);
              break;

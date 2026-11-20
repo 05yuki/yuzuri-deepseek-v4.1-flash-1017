@@ -1,32 +1,28 @@
 diff --git a/kt-kernel/python/experts_base.py b/kt-kernel/python/experts_base.py
+index 88f9a33..e03330c 100644
 --- a/kt-kernel/python/experts_base.py
 +++ b/kt-kernel/python/experts_base.py
-@@ -387,6 +387,7 @@
+@@ -560,7 +560,8 @@ class BaseMoEWrapper(_MoEBase, ABC):
+         hidden_states: torch.Tensor,
          topk_ids: torch.Tensor,
          topk_weights: torch.Tensor,
-         cuda_stream,
+-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], tuple, int, int]:
 +        packer=None,
-     ):
-         """
-         Submit forward inference task to CPU (non-blocking).
-@@ -415,20 +416,35 @@
- 
++    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], tuple, int, int]:
+         """D2H copy into pinned CPU buffers; return deferred ids and buffer handles."""
+         self._check_qlen_fits_cpp_buffers(hidden_states)
+         flat_hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+@@ -579,19 +580,35 @@ class BaseMoEWrapper(_MoEBase, ABC):
+         next_slot = (current_slot + 1) % KExpertsCPUBuffer.buffer_depth
          bsz_slot_tensor = bsz_tensor_cpu[current_slot]
  
 -        topk_ids_long = topk_ids.to(torch.long)
--        immediate_ids: torch.Tensor
--        deferred_ids: Optional[torch.Tensor]
 -        if self.max_deferred_experts_per_token > 0:
 -            protected_k = self.num_experts_per_tok - self.max_deferred_experts_per_token
--
 -            immediate_ids, deferred_ids = self.select_deferred_experts(topk_ids_long, topk_weights, protected_k)
 -        else:
 -            immediate_ids = topk_ids_long
 -            deferred_ids = None
--
--        input_tensor_cpu[current_slot].copy_(flat_hidden_states, non_blocking=True)
--        weights_cpu[current_slot].copy_(topk_weights, non_blocking=True)
--        immediate_experts_ids_cpu[current_slot].copy_(immediate_ids, non_blocking=True)
 +        # packer(x, weights, ids, host_x, host_w, host_ids) -> bool (KT_HANDOFF_PACK in
 +        # SGLang): stages all three into the pinned buffers at once; False = the copies.
 +        packed = bool(
@@ -41,21 +37,43 @@ diff --git a/kt-kernel/python/experts_base.py b/kt-kernel/python/experts_base.py
 +                immediate_experts_ids_cpu[current_slot],
 +            )
 +        )
++        immediate_ids: Optional[torch.Tensor] = None
 +        deferred_ids: Optional[torch.Tensor] = None
 +        if not packed:
 +            topk_ids_long = topk_ids.to(torch.long)
-+            immediate_ids: torch.Tensor
 +            if self.max_deferred_experts_per_token > 0:
 +                protected_k = self.num_experts_per_tok - self.max_deferred_experts_per_token
-+
 +                immediate_ids, deferred_ids = self.select_deferred_experts(topk_ids_long, topk_weights, protected_k)
 +            else:
 +                immediate_ids = topk_ids_long
-+                deferred_ids = None
-+
+ 
+-        input_tensor_cpu[current_slot].copy_(flat_hidden_states, non_blocking=True)
+-        weights_cpu[current_slot].copy_(topk_weights, non_blocking=True)
+-        immediate_experts_ids_cpu[current_slot].copy_(immediate_ids, non_blocking=True)
+-        if deferred_ids is not None:
+-            deferred_experts_ids_cpu[current_slot].copy_(deferred_ids, non_blocking=True)
 +            input_tensor_cpu[current_slot].copy_(flat_hidden_states, non_blocking=True)
 +            weights_cpu[current_slot].copy_(topk_weights, non_blocking=True)
 +            immediate_experts_ids_cpu[current_slot].copy_(immediate_ids, non_blocking=True)
++            if deferred_ids is not None:
++                deferred_experts_ids_cpu[current_slot].copy_(deferred_ids, non_blocking=True)
  
-         incremental = BaseMoEWrapper._layer_has_pending_deferred.get(self.layer_idx - 1, False)
-         self.cpu_infer.submit_with_cuda_stream(
+         buffers = (
+             input_tensor_cpu,
+@@ -749,6 +766,7 @@ class BaseMoEWrapper(_MoEBase, ABC):
+         topk_ids: torch.Tensor,
+         topk_weights: torch.Tensor,
+         cuda_stream,
++        packer=None,
+     ):
+         """
+         Submit forward inference task to CPU (non-blocking).
+@@ -760,7 +778,7 @@ class BaseMoEWrapper(_MoEBase, ABC):
+             cuda_stream: CUDA stream for synchronization
+         """
+         _immediate_ids, deferred_ids, _buffers, current_slot, next_slot = self._prepare_forward_cpu_buffers(
+-            hidden_states, topk_ids, topk_weights
++            hidden_states, topk_ids, topk_weights, packer
+         )
+         (
+             input_tensor_cpu,

@@ -18,7 +18,7 @@ Everything else that the launch needs comes from Yuzuri's hooks at startup.
 | piece | where it comes from |
 |---|---|
 | SGLang | main at `401d0c79`, with `patches/sglang-v41/` (six patches) |
-| kt-kernel | KTransformers `95009ea`, with `patches/kt-*.patch` |
+| kt-kernel | KTransformers `ca198c5`, with `patches/kt-*.patch` |
 | Yuzuri | a pinned commit of [05yuki/yuzuri](https://github.com/05yuki/yuzuri), fetched by `setup.sh` |
 | engram row store | `engram-adapter/`, built by `setup.sh` |
 

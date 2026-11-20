@@ -1,6 +1,8 @@
---- a/kt-kernel/operators/llamafile/moe.hpp	2026-11-10 10:17:49.806618701 +0900
-+++ b/kt-kernel/operators/llamafile/moe.hpp	2026-11-10 10:17:49.808220102 +0900
-@@ -790,8 +790,16 @@
+diff --git a/kt-kernel/operators/llamafile/moe.hpp b/kt-kernel/operators/llamafile/moe.hpp
+index 70631d5..7b86bad 100644
+--- a/kt-kernel/operators/llamafile/moe.hpp
++++ b/kt-kernel/operators/llamafile/moe.hpp
+@@ -864,8 +864,16 @@ class LLAMA_MOE_TP {
        return true;
      }
      const long k = cols / ggml_blck_size((ggml_type)type);
@@ -19,7 +21,7 @@
    }
    // fills the bases of the experts in ids (unique, not skipped) from the cache; false when the cache is off
    std::vector<std::shared_ptr<std::atomic<int>>> kt_left_;  // per expert: its reads still in flight
-@@ -1085,6 +1093,27 @@
+@@ -1156,6 +1164,27 @@ class LLAMA_MOE_TP {
        config_.gate_type = kernel_gate_type_;
        config_.up_type = kernel_up_type_;
      }

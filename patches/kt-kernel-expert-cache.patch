@@ -1,8 +1,8 @@
 diff --git a/kt-kernel/ext_bindings.cpp b/kt-kernel/ext_bindings.cpp
-index 4766629..b105e7e 100644
+index 20a42e6..ecd32de 100644
 --- a/kt-kernel/ext_bindings.cpp
 +++ b/kt-kernel/ext_bindings.cpp
-@@ -486,6 +486,17 @@ void bind_moe_module(py::module_& moe_module, const char* name) {
+@@ -510,6 +510,17 @@ void bind_moe_module(py::module_& moe_module, const char* name) {
      moe_cls.def("expert_arena_infos", &MoeClass::expert_arena_infos);
    }
  
@@ -648,10 +648,10 @@ index 0000000..5dfce52
 +
 +#endif  // KT_MXFP4_EXPERT_CACHE_HPP
 diff --git a/kt-kernel/operators/avx2/mxfp4-moe.hpp b/kt-kernel/operators/avx2/mxfp4-moe.hpp
-index b482ee1..4aea239 100644
+index 41283dd..14b8b0b 100644
 --- a/kt-kernel/operators/avx2/mxfp4-moe.hpp
 +++ b/kt-kernel/operators/avx2/mxfp4-moe.hpp
-@@ -53,6 +53,7 @@ static inline bool kt_scale_codes_load_all() {
+@@ -54,6 +54,7 @@ static inline bool kt_scale_codes_load_all() {
  #include "avx2_bf16_gemm.hpp"
  #include "avx2_bf16_utils.hpp"
  #include "moe_base.hpp"
@@ -659,7 +659,7 @@ index b482ee1..4aea239 100644
  
  
  // kt-kernel-nvfp4-cpu-a4.py: flashinfer's NVFP4 activation quantize, on the CPU
-@@ -1677,6 +1678,144 @@ class AVX2_MXFP4_MOE_TP : public AVX2_MOE_BASE<T, AVX2_MXFP4_MOE_TP<T>> {
+@@ -1679,6 +1680,144 @@ class AVX2_MXFP4_MOE_TP : public AVX2_MOE_BASE<T, AVX2_MXFP4_MOE_TP<T>> {
    size_t buffer_a_required_size_impl(size_t m, size_t k) const {
      return T::BufferA::required_size(m, k, config_.quant_config.group_size);
    }
@@ -804,7 +804,7 @@ index b482ee1..4aea239 100644
    size_t buffer_b_required_size_impl(size_t n, size_t k) const {
      // Always allocate full buffer (weights + scales) for both per-expert and flat-buffer modes.
      // Per-expert mode used to only allocate scales and point b into mmap, but that caused
-@@ -2001,6 +2140,16 @@ class TP_MOE<AVX2_MXFP4_MOE_TP<K>> : public TP_MOE<AVX2_MOE_BASE<K, AVX2_MXFP4_M
+@@ -2003,6 +2142,16 @@ class TP_MOE<AVX2_MXFP4_MOE_TP<K>> : public TP_MOE<AVX2_MOE_BASE<K, AVX2_MXFP4_M
      auto pool = config.pool;
      const uint64_t* physical_to_logical_map = (const uint64_t*)config.physical_to_logical_map;
      bool use_per_expert = !config.gate_projs.empty();
@@ -821,7 +821,7 @@ index b482ee1..4aea239 100644
      if (config.gate_projs.empty() && config.gate_scale == nullptr)
        throw std::runtime_error("MXFP4 AVX2 MoE only supports packed FP4 with KGroup scales");
  
-@@ -2238,11 +2387,49 @@ class TP_MOE<AVX2_MXFP4_MOE_TP<K>> : public TP_MOE<AVX2_MOE_BASE<K, AVX2_MXFP4_M
+@@ -2240,11 +2389,49 @@ class TP_MOE<AVX2_MXFP4_MOE_TP<K>> : public TP_MOE<AVX2_MOE_BASE<K, AVX2_MXFP4_M
          (int)w2_weight_ptrs.size() != gpu_tp_count || (int)w2_scale_ptrs.size() != gpu_tp_count) {
        throw std::runtime_error("Pointer arrays size must match gpu_tp_count");
      }
@@ -872,20 +872,20 @@ index b482ee1..4aea239 100644
  
  #endif  // CPUINFER_OPERATOR_AVX2_MXFP4_MOE_H
 diff --git a/kt-kernel/python/utils/amx.py b/kt-kernel/python/utils/amx.py
-index 62abd34..2119dbe 100644
+index 5c32cc6..ed99f05 100644
 --- a/kt-kernel/python/utils/amx.py
 +++ b/kt-kernel/python/utils/amx.py
-@@ -735,6 +735,9 @@ class NativeMoEWrapper(BaseMoEWrapper):
+@@ -793,6 +793,9 @@ class NativeMoEWrapper(BaseMoEWrapper):
      def load_weights(self, physical_to_logical_map_cpu: torch.Tensor):
          import time
  
 +        if self.method == "MXFP4" and float(os.environ.get("KT_MXFP4_EXPERT_CACHE_GIB", "0") or 0) > 0:
 +            return self._load_weights_mxfp4_cache(physical_to_logical_map_cpu)
 +
-         if NativeMoEWrapper._native_loader_instance is None:
-             t_recreate_start = time.time()
-             NativeMoEWrapper._native_loader_instance = NativeMoEWrapper._create_loader(self.method, self.weight_path)
-@@ -1043,6 +1046,96 @@ class NativeMoEWrapper(BaseMoEWrapper):
+         loader = self.loader
+         if loader is None:
+             loader = NativeMoEWrapper._create_loader(self.method, self.weight_path)
+@@ -1108,6 +1111,96 @@ class NativeMoEWrapper(BaseMoEWrapper):
              f"total: {(t6-t0)*1000:.1f}ms"
          )
  

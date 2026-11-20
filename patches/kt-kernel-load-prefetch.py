@@ -178,63 +178,14 @@ s = once(
     s,
 )
 
-# keep the full path of each shard; file_handle_map is keyed by basename
-s = once(
-    """                    file_path = os.path.join(root, file)
-                    if file not in self.file_handle_map:
-""",
-    """                    file_path = os.path.join(root, file)
-                    self.file_path_map[file] = file_path
-                    if file not in self.file_handle_map:
-""",
-    s,
-)
-s = once(
-    """        self.file_handle_map = {}
-        self.tensor_file_map = {}
-        self.tensor_type_map = {}
-        self.tensor_device_map = {}
-
-        found_safetensor = False
-""",
-    """        self.file_handle_map = {}
-        self.file_path_map = {}
-        self.tensor_file_map = {}
-        self.tensor_type_map = {}
-        self.tensor_device_map = {}
-
-        found_safetensor = False
-""",
-    s,
-)
-
 # the method every loader can call with the keys it is about to hand over
 s = once(
-    """    def load_tensor(self, key: str, device: str = "cpu"):
-        if key not in self.tensor_file_map:
-            raise KeyError(f"Key {key} not found in Safetensor files")
-        file = self.tensor_file_map[key]
-        f = self.file_handle_map.get(file)
-        if f is None:
-            raise FileNotFoundError(f"File {file} not found in Safetensor files")
-        tensor = f.get_tensor(key)
-        return tensor.to(device)
+    """    def close_all_handles(self):
 """,
-    """    def load_tensor(self, key: str, device: str = "cpu"):
-        if key not in self.tensor_file_map:
-            raise KeyError(f"Key {key} not found in Safetensor files")
-        file = self.tensor_file_map[key]
-        f = self.file_handle_map.get(file)
-        if f is None:
-            raise FileNotFoundError(f"File {file} not found in Safetensor files")
-        tensor = f.get_tensor(key)
-        return tensor.to(device)
-
-    def _ranges_for(self, keys):
+    """    def _ranges_for(self, keys):
         ranges = []
         for k in keys:
-            file = self.tensor_file_map.get(k)
-            path = getattr(self, "file_path_map", {}).get(file)
+            path = self.tensor_file_map.get(k)
             if path is None:
                 continue
             ent = _st_header(path).get(k)
@@ -296,6 +247,8 @@ s = once(
             if _executor is None:
                 _executor = ThreadPoolExecutor(1)
             _pending[nxt] = _executor.submit(_prefetch_ranges, ranges)
+
+    def close_all_handles(self):
 """,
     s,
 )
@@ -306,8 +259,7 @@ s = once(
 # (a loader without SCALE_SUFFIX names the MXFP4 scales ".scale")
 for fmt, scales in (("MXFP4", '("weight", getattr(self, "SCALE_SUFFIX", "scale"))'),
                     ("NVFP4", '("weight", "weight_scale", "weight_scale_2")')):
-    anchor = f"""                f"No {fmt} experts found under any of: {{self._experts_prefix_candidates(base_key)}}"
-            )
+    anchor = f"""            raise ValueError(f"No {fmt} experts found under any of: {{self._experts_prefix_candidates(base_key)}}")
 
         gate_weights = [None] * expert_count
 """

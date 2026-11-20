@@ -97,6 +97,7 @@ On the test machine the first launch was up after 519 s on two GPUs, and later l
 | `SGLANG_HOST` | 127.0.0.1 | The address to listen on. |
 | `SGLANG_API_KEY` | | A key every request must carry. |
 | `SGLANG_CONTEXT_LENGTH` | 1,048,576 | A shorter context, and with it a smaller KV pool. |
+| `SGLANG_MAX_RUNNING_REQUESTS` | 1 | Requests decoded together. A long prompt holds the others while it prefills. |
 | `SGLANG_SERVED_NAME` | | The model name the API reports. |
 | `SGLANG_EXTRA_ARGS` | | More arguments for the SGLang server. |
 | `DSV41_HICACHE` | 1 | 0 keeps the prefix cache on the GPU only. |

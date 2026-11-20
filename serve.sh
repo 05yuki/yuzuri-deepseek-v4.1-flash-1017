@@ -125,6 +125,7 @@ args=(--profile auto --config-dir "$model" --package --venv "$venv"
 [[ -n "$gguf" ]] && args+=(--gguf "$gguf" --served-model-name "${SGLANG_SERVED_NAME:-$name}")
 args+=(--tp "${SGLANG_TP:-$n_gpus}")
 [[ -n "${SGLANG_CONTEXT_LENGTH:-}" ]] && args+=(--context "$SGLANG_CONTEXT_LENGTH")
+[[ -n "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]] && args+=(--max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS")
 [[ -z "$gguf" && -n "${SGLANG_SERVED_NAME:-}" ]] && args+=(--served-model-name "$SGLANG_SERVED_NAME")
 # The prefix cache: a prompt that starts like an earlier one reads that part from the cache. Its pages are
 # also kept in host memory (HiCache, write-back, twice the GPU pool), so a prefix the GPU has given up is

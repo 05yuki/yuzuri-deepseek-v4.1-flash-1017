@@ -14,6 +14,15 @@ The rest of the GPU memory is working room, and each use of it shrinks when ther
 - Yuzuri makes one expert pool per NUMA node and uses every physical core.
 - kt-kernel's MXFP4 kernels need AVX2.
 
+### With 256 GB
+
+- One socket of the test machine (32 cores, 251 GiB) with one GPU runs the model.
+- The launch is `numactl -N 0 -m 0 env CUDA_VISIBLE_DEVICES=0 MODEL=<checkpoint dir> ./serve.sh`.
+- Yuzuri then keeps as many experts in an expert cache as the node's free memory holds.
+- The other experts are read from the checkpoint on the drive when the routing picks them.
+- Decode is 24.1 tok/s and a 35,000-token prefill 42.2 s there, against 39.2 tok/s and 27.4 s with both sockets ([README](../README.md#results)).
+- A machine with one socket and 256 GB has not been run with this repository.
+
 ## GPU
 
 - One or two cards of 16 GB, SM120 (RTX 50).

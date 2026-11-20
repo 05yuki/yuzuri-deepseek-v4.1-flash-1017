@@ -3,7 +3,7 @@
 ## What setup.sh does
 
 ```
-[MODEL=<checkpoint dir>] [PREBUILT=<archive or directory>] ./setup.sh
+[MODEL=<checkpoint dir>] [GGUF=<GGUF pack dir>] [PREBUILT=<archive or directory>] ./setup.sh
 ```
 
 1. Clones sgl-project/sglang at `8c7ec052` and applies the six patches of `patches/sglang-v41/`.
@@ -14,7 +14,8 @@
 6. Builds the engram row store, `engram-adapter/librow_store.so`.
 7. Clones Yuzuri at the commit pinned in `YUZURI_COMMIT` into `third_party/yuzuri` and attaches it to the venv (`setup.sh --package`).
 8. With `MODEL` set, writes the engram manifest from the checkpoint's headers (`state/engram-<model>/engram-manifest.json`).
-9. Runs the test of the attention-output FP8 kernel on this GPU.
+9. With `GGUF` set, writes the pack's config directory and its engram manifest under `state/gguf-<pack>/` ([gguf.md](gguf.md)).
+10. Runs the test of the attention-output FP8 kernel on this GPU.
 
 - Each patch is checked against its pinned tree before it is applied.
 - A patch that does not fit stops the setup with nothing applied.
@@ -27,6 +28,8 @@
 | variable | meaning |
 |---|---|
 | `MODEL` | The checkpoint directory. Without it the engram manifest is written by `serve.sh` at the first launch. |
+| `GGUF` | A directory with a GGUF pack of the model. |
+| `BASE` | With `GGUF`: a directory with the model's `config.json`, tokenizer and `encoding/`. Without `BASE` and `MODEL`, `setup.sh` downloads those files alone. |
 | `PREBUILT` | A prebuilt archive or its unpacked directory (below). |
 | `CUDA_HOME` | The system toolkit, default `/usr/local/cuda`. |
 | `CUDA_WHEELS=0` | Forbids the download of NVIDIA's toolkit wheels. |
@@ -66,6 +69,7 @@ Yuzuri reads the checkpoint and the machine and plans the launch (`third_party/y
 - The prefix cache with its copy in host memory.
 - One request at a time.
 - FlashInfer autotune off, so outputs reproduce across launches.
+- Under `numactl -N <node> -m <node>` the plan is for that node alone: its cores, and an expert cache in its free memory for the experts that do not fit.
 
 `serve.sh` adds what belongs to this model.
 
@@ -85,6 +89,8 @@ On the test machine the first launch was up after 519 s on two GPUs, and later l
 | variable | default | meaning |
 |---|---|---|
 | `MODEL` | | The checkpoint directory. |
+| `GGUF` | | A GGUF pack directory, served instead of the checkpoint ([gguf.md](gguf.md)). |
+| `YUZURI_WITHOUT` | | Yuzuri features to leave off, comma separated ([features.md](features.md)). |
 | `CUDA_VISIBLE_DEVICES` | all GPUs | The GPUs to use. |
 | `SGLANG_TP` | the visible GPUs | Fewer tensor-parallel ranks than visible GPUs. |
 | `SGLANG_PORT` | 8080 | The port. |

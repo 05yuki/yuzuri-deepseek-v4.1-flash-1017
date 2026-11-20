@@ -67,6 +67,7 @@ Thinking is off unless a request sets `"chat_template_kwargs": {"thinking": true
   SM89 (RTX 40) is selected by `03-sm89-attention` but has not been run with this repository.
 - 512 GB of RAM.
   The server uses about 420 GiB.
+  With 256 GB the experts that do not fit are read from the drive ([docs/requirements.md](docs/requirements.md#with-256-gb)).
 - An x86-64 CPU with AVX2.
 - The checkpoint (476 GiB) on an NVMe drive.
   Its random read rate limits the prefill; see [Prefill and the drive](#prefill-and-the-drive).
@@ -112,25 +113,29 @@ One request at a time.
 
 Decode by kind of text:
 
-| text | two GPUs | one GPU, both sockets |
-|---|---|---|
-| Chinese prose | 50.6 tok/s | 35.1 tok/s |
-| English prose | 45.3 tok/s | 33.9 tok/s |
-| English technical prose | 40.1 tok/s | 32.2 tok/s |
-| math | 44.4 tok/s | 33.9 tok/s |
-| JSON | 43.4 tok/s | 32.8 tok/s |
-| Python code | 40.2 tok/s | 31.7 tok/s |
+| text | two GPUs | one GPU, both sockets | one GPU, one socket |
+|---|---|---|---|
+| Chinese prose | 50.6 tok/s | 35.1 tok/s | 21.0 tok/s |
+| English prose | 45.3 tok/s | 33.9 tok/s | 18.9 tok/s |
+| English technical prose | 40.1 tok/s | 32.2 tok/s | 16.4 tok/s |
+| math | 44.4 tok/s | 33.9 tok/s | 19.0 tok/s |
+| JSON | 43.4 tok/s | 32.8 tok/s | 17.9 tok/s |
+| Python code | 40.2 tok/s | 31.7 tok/s | 16.1 tok/s |
+
+- The hot experts on the GPU are swapped for the ones the text being written routes to most.
+- Code, JSON, math and English spread their routes over more experts than Japanese prose, so the CPU computes more of them.
 
 ### Long prompts
 
-One prompt of random token ids, sent to a server that has just come up.
+Prompts of random token ids, sent one after another to one server, shortest first.
+No prompt shares a prefix with the one before it.
 
-| prompt | two GPUs | one GPU, both sockets |
-|---|---|---|
-| 65,536 tokens | | 51.7 s (1,268 tok/s) |
-| 131,072 tokens | 62.5 s (2,096 tok/s) | 102.8 s (1,275 tok/s) |
-| 524,288 tokens | 328.6 s (1,596 tok/s) | 653.6 s (802 tok/s) |
-| 1,000,000 tokens | 484.6 s (2,063 tok/s) | 837.7 s (1,194 tok/s) |
+| prompt | two GPUs | one GPU, both sockets | one GPU, one socket |
+|---|---|---|---|
+| 65,536 tokens | 32.3 s (2,028 tok/s) | 48.3 s (1,357 tok/s) | 85.6 s (766 tok/s) |
+| 131,072 tokens | 63.3 s (2,071 tok/s) | 91.5 s (1,432 tok/s) | 155.5 s (843 tok/s) |
+| 524,288 tokens | 213.3 s (2,458 tok/s) | 345.5 s (1,517 tok/s) | 586.1 s (895 tok/s) |
+| 1,000,000 tokens | 450.2 s (2,221 tok/s) | 693.8 s (1,441 tok/s) | 1,160.8 s (861 tok/s) |
 
 ### Prefill and the drive
 

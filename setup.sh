@@ -18,7 +18,7 @@ cd "$here"
 SGLANG_COMMIT=8c7ec05287904d88854d9fb5bcbe1a5181282b5e
 KT_COMMIT=95009ea6856c0799e517e93cb12be5e8494bc7ce
 YUZURI_REPO="${YUZURI_REPO:-https://github.com/05yuki/yuzuri.git}"
-YUZURI_COMMIT=cc71313cd8a84de5ed04f62b5719989c7887f750
+YUZURI_COMMIT=fb4de389fcdca7ec7d2b5d3077eebca6c18af4f9
 sglang_patches=()
 for f in "$here"/patches/sglang-v41/[0-9][0-9]-*.patch; do sglang_patches+=("sglang-v41/$(basename "$f")"); done
 kt_patches=(kt-kernel-tree.patch kt-kernel-cpu-handoff.patch kt-kernel-expert-cache.patch kt-kernel-gguf.patch

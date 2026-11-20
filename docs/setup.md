@@ -6,7 +6,7 @@
 [MODEL=<checkpoint dir>] [GGUF=<GGUF pack dir>] [PREBUILT=<archive or directory>] ./setup.sh
 ```
 
-1. Clones sgl-project/sglang at `8c7ec052` and applies the six patches of `patches/sglang-v41/`.
+1. Clones sgl-project/sglang at `401d0c79` and applies the six patches of `patches/sglang-v41/`.
 2. Clones kvcache-ai/ktransformers at `95009ea` with its llama.cpp and pybind11 submodules, and applies `patches/kt-*.patch`.
 3. Creates `.venv` (Python 3.12) from `requirements.txt` and installs the patched SGLang in place.
 4. Chooses the CUDA toolkit for the kernels compiled at run time: the system's when it is usable, otherwise NVIDIA's wheels under `build/`.

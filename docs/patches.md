@@ -4,7 +4,7 @@
 
 ## SGLang: the six model patches (`patches/sglang-v41/`)
 
-They are applied to SGLang main at `8c7ec052`, in this order.
+They are applied to SGLang main at `401d0c79`, in this order.
 They change `python/sglang/srt/models/deepseek_v4.py`, its attention kernels and its KV pool: the model's own files.
 Nothing else in SGLang is patched; the rest comes from Yuzuri's hooks at startup.
 

@@ -1,4 +1,4 @@
-From 0245c2c3ba1f9226ed149492adda3f1e4e72fbc5 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: 05yuki <ceu.azul.samu@gmail.com>
 Date: Fri, 23 Oct 2026 00:40:00 +0900
 Subject: [PATCH] deepseek-v4.1: the V4.1 KV cache layouts on SM120 / SM121
@@ -36,10 +36,10 @@ Claude-Session: https://claude.ai/code/session_01C2UBZdnrDZSBh8yQz8rc9g
  3 files changed, 109 insertions(+), 2 deletions(-)
 
 diff --git a/python/sglang/kernels/ops/attention/flash_mla_sm120.py b/python/sglang/kernels/ops/attention/flash_mla_sm120.py
-index c57194d3..1ec816c7 100644
+index 5cfe505c8d..6776d5579e 100644
 --- a/python/sglang/kernels/ops/attention/flash_mla_sm120.py
 +++ b/python/sglang/kernels/ops/attention/flash_mla_sm120.py
-@@ -313,6 +313,22 @@ def flash_mla_with_kvcache_sm120(**kwargs):
+@@ -315,6 +315,22 @@ def flash_mla_with_kvcache_sm120(**kwargs):
      extra_indices = kwargs.get("extra_indices_in_kvcache")
      extra_topk_length = kwargs.get("extra_topk_length")
  
@@ -62,7 +62,7 @@ index c57194d3..1ec816c7 100644
      if _sm120_default_backend == "flashinfer":
          if q.shape[0] > SM120_DECODE_MAX_TOKENS:
              return _flash_mla_sm120_prefill(
-@@ -580,6 +596,80 @@ def _split_kv_pages_to_64(
+@@ -582,6 +598,80 @@ def _split_kv_pages_to_64(
      )
  
  
@@ -144,10 +144,10 @@ index c57194d3..1ec816c7 100644
      q,
      k_cache,
 diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
-index 13c2e4ad..bc0d53e5 100644
+index 4a81199aa0..75df925686 100644
 --- a/python/sglang/srt/environ.py
 +++ b/python/sglang/srt/environ.py
-@@ -2022,6 +2022,8 @@ class Envs:
+@@ -2093,6 +2093,8 @@ class Envs:
      # Compressed-cache layout under "v41": "auto" (fp4 for the fp4-rounded
      # ratio-1 / ratio-2 latents, fp8 for ratios 4 / 128), "fp8" or "fp4" for all.
      SGLANG_DSV4_COMPRESSED_KV_LAYOUT = EnvStr("auto")
@@ -157,7 +157,7 @@ index 13c2e4ad..bc0d53e5 100644
      # bf16 rope pool, 640 B/token instead of 1024. The unified pool takes no
      # dtype, so --kv-cache-dtype has no effect there and this switch is the
 diff --git a/python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py b/python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py
-index da74328e..0d3a28d6 100644
+index da74328e86..0d3a28d6f4 100644
 --- a/python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py
 +++ b/python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py
 @@ -239,10 +239,25 @@ def select_dsv4_kv_layout() -> Tuple[KVLayout, Optional[str]]:

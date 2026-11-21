@@ -1,0 +1,226 @@
+diff --git a/kt-kernel/cpu_backend/worker_pool.h b/kt-kernel/cpu_backend/worker_pool.h
+index 72c9b63..7200901 100644
+--- a/kt-kernel/cpu_backend/worker_pool.h
++++ b/kt-kernel/cpu_backend/worker_pool.h
+@@ -76,6 +76,8 @@ class InNumaPool {
+   ~InNumaPool();
+   int get_thread_num();
+   void set_restricted_worker_count(int count);
++  // the threads a job of this pool runs on
++  int get_restricted_worker_count() const { return restricted_worker_count; }
+ 
+   void do_work_stealing_job_async(int, std::function<void(int)>, std::function<void(int)>, std::function<void(int)>);
+   void wait();
+diff --git a/kt-kernel/operators/avx2/moe_base.hpp b/kt-kernel/operators/avx2/moe_base.hpp
+index 136bda7..e89d21b 100644
+--- a/kt-kernel/operators/avx2/moe_base.hpp
++++ b/kt-kernel/operators/avx2/moe_base.hpp
+@@ -33,6 +33,9 @@
+ #include <utility>
+ #include <vector>
+ 
++#include <atomic>
++
++#include "../../cpu_backend/kt_knobs.h"
+ #include "../../cpu_backend/shared_mem_buffer.h"
+ #include "../../cpu_backend/worker_pool.h"
+ #include "../common.hpp"
+@@ -63,6 +66,36 @@ inline double us(std::chrono::steady_clock::time_point a, std::chrono::steady_cl
+ }
+ }  // namespace kt_decode_phases
+ 
++// One task of a decode GEMM job: block `ith` of `nth` of matrix `mat` of the job.
++struct KtDecodeTask {
++  int mat, ith, nth;
++};
++// A job's tasks in the order the pool hands them out. The threads of a part share one memory bus and do not
++// finish together: with equal tasks the job lasts until the last one ends, about half a task after the
++// others (measured on DeepSeek-V4.1's experts, 2 x 30 threads: about 30 us a layer at any number of experts).
++// Here the job's last `tail` kernel blocks are cut in halves (the first half of them), quarters (the next
++// quarter) and eighths (the rest), in whole multiples of 8 rows, so a thread that comes free near the end
++// takes a small piece. Every output row is computed by the same loop as before. `pairs` = 2 keeps the
++// gate / up alternation of the job (matrix 2e is expert e's gate, 2e + 1 its up).
++inline void kt_decode_tasks(std::vector<KtDecodeTask>& out, int mats, int pairs, int n, int nth, int tail) {
++  out.clear();
++  const int rows = n / nth, units = mats * nth;
++  if (n % nth != 0 || rows % 8 != 0) tail = 0;
++  tail = std::min(std::max(tail, 0), units);
++  for (int u = 0; u < units; u++) {
++    const int p = u / pairs, mat = (p / nth) * pairs + u % pairs, ith = p % nth;
++    int d = 1;
++    const int j = u - (units - tail);
++    if (j >= 0) d = j < tail / 2 ? 2 : (j < tail / 2 + tail / 4 ? 4 : 8);
++    while (d > 1 && (rows % d != 0 || (rows / d) % 8 != 0)) d /= 2;
++    for (int s2 = 0; s2 < d; s2++) out.push_back({mat, ith * d + s2, nth * d});
++  }
++}
++inline std::atomic<uint64_t>& kt_decode_serial() {
++  static std::atomic<uint64_t> v{1};
++  return v;
++}
++
+ template <class T, class Derived>
+ class AVX2_MOE_BASE {
+  public:
+@@ -600,7 +633,7 @@ class AVX2_MOE_BASE {
+       gate_up_ba_[expert_idx]->from_mat(qlen, (ggml_bf16_t*)input, 0, 1);
+     }
+ 
+-    if (kt_timed) kt_t1 = std::chrono::steady_clock::now();
++    if (kt_timed) kt_t2 = kt_t1 = std::chrono::steady_clock::now();  // kt_t2: a call with no CPU expert skips the round that sets it
+     // kt-mxfp4-expert-cache: with reads still running, the cached experts first (gate, up, down), then the rest
+     // once they are read; the weighted sum below is one pass either way
+     const int kt_all = activated_expert;
+@@ -624,21 +657,42 @@ class AVX2_MOE_BASE {
+     }
+     // Gate + Up GEMM
+     int nth = T::recommended_nth(config_.intermediate_size);
++    // KT_DECODE_TAIL (live knob): the blocks at the end of the gate+up job cut smaller (kt_decode_tasks).
++    // -1 = half the part's threads, 0 = none. Only for kernels whose BufferA carries perm_tag (the FP4
++    // kernels, whose rows are computed one by one); the down job gains nothing from it (measured).
++    static std::atomic<int>& kt_tail_knob = kt_knob("KT_DECODE_TAIL", -1);
++    static thread_local std::vector<KtDecodeTask> kt_tasks;
++    int kt_tail = 0;
++    if constexpr (requires { gate_up_ba_[0]->perm_tag; }) {
++      kt_tail = kt_tail_knob.load(std::memory_order_relaxed);
++      if (kt_tail < 0) kt_tail = pool->get_restricted_worker_count() / 2;
++      // The gate and up of an expert read the same row, and so do all experts unless the kernel quantized
++      // each expert's copy (compared, not assumed); an expert's down reads its own.
++      const uint64_t kt_tag = kt_decode_serial().fetch_add(1) << 16;
++      const size_t kt_row_bytes = (size_t)qlen * config_.hidden_size * sizeof(*gate_up_ba_[0]->data);
++      for (int i = 0; i < activated_expert; i++) {
++        auto& ba = gate_up_ba_[m_expert_id_map_[i]];
++        const bool same = i == 0 || std::memcmp(ba->data, gate_up_ba_[m_expert_id_map_[0]]->data, kt_row_bytes) == 0;
++        ba->perm_tag = kt_tag | (same ? 1u : (uint64_t)(2 + 2 * i));
++        down_ba_[m_expert_id_map_[i]]->perm_tag = kt_tag | (uint64_t)(3 + 2 * i);
++      }
++    }
+     if constexpr (has_fused_gate_up_decode()) {
+       if (activated_expert > 0) run_fused_gate_up_decode(activated_expert, qlen);
+     } else {
++      kt_decode_tasks(kt_tasks, activated_expert * 2, 2, config_.intermediate_size, nth, kt_tail);
++      const KtDecodeTask* kt_tp = kt_tasks.data();
+       pool->do_work_stealing_job(
+-          nth * activated_expert * 2, [](int) { T::config(); },
+-          [this, nth, qlen](int task_id2) {
+-            int task_id = task_id2 / 2;
+-            bool do_up = task_id2 % 2;
+-            int expert_idx = m_expert_id_map_[task_id / nth];
+-            int ith = task_id % nth;
+-            derived()->do_gate_up_gemm(do_up, expert_idx, ith, nth, qlen);
++          (int)kt_tasks.size(), [](int) { T::config(); },
++          [this, kt_tp, qlen](int task_id2) {
++            const KtDecodeTask t = kt_tp[task_id2];
++            bool do_up = t.mat % 2;
++            int expert_idx = m_expert_id_map_[t.mat / 2];
++            derived()->do_gate_up_gemm(do_up, expert_idx, t.ith, t.nth, qlen);
+             if (do_up) {
+-              up_bc_[expert_idx]->to_mat(qlen, m_local_up_output_ptr_[expert_idx], ith, nth);
++              up_bc_[expert_idx]->to_mat(qlen, m_local_up_output_ptr_[expert_idx], t.ith, t.nth);
+             } else {
+-              gate_bc_[expert_idx]->to_mat(qlen, m_local_gate_output_ptr_[expert_idx], ith, nth);
++              gate_bc_[expert_idx]->to_mat(qlen, m_local_gate_output_ptr_[expert_idx], t.ith, t.nth);
+             }
+           },
+           nullptr);
+@@ -672,6 +726,13 @@ class AVX2_MOE_BASE {
+           },
+           nullptr);
+     }
++    // a later call with other rows in these buffers must not find this call's tags
++    if constexpr (requires { gate_up_ba_[0]->perm_tag; }) {
++      for (int i = 0; i < activated_expert; i++) {
++        gate_up_ba_[m_expert_id_map_[i]]->perm_tag = 0;
++        down_ba_[m_expert_id_map_[i]]->perm_tag = 0;
++      }
++    }
+     }
+     activated_expert = kt_all;
+ 
+diff --git a/kt-kernel/operators/avx2/mxfp4-moe.hpp b/kt-kernel/operators/avx2/mxfp4-moe.hpp
+index 14b8b0b..a82d653 100644
+--- a/kt-kernel/operators/avx2/mxfp4-moe.hpp
++++ b/kt-kernel/operators/avx2/mxfp4-moe.hpp
+@@ -309,6 +309,9 @@ struct GemmKernelAVX2MXFP4 {
+     // per 64-row weight slice, 36-80 per expert — redid this conversion for
+     // the whole m x k block, which was ~40% of a prefill task.
+     float* perm = nullptr;
++    // Nonzero: every BufferA of one decode call that holds the same row carries the same tag, and a thread
++    // that already made its permuted fp32 copy for that tag (an earlier task of the call) uses it again.
++    uint64_t perm_tag = 0;
+     // int8 copy for KT_MXFP4_G32_INT8 (patches/kt-mxfp4-g32-int8.py): u8 =
+     // round(a / da) + 128 per row in the decode's lane order, da per row and
+     // per block of 1024 values. Filled by from_mat with perm, shared by the
+@@ -471,6 +474,11 @@ struct GemmKernelAVX2MXFP4 {
+     std::unique_ptr<uint8_t[]> code_store;
+     uint8_t* code = nullptr;
+     alignas(64) float lut[256];
++    // Two-bit scale codes for the single-row (decode) loop when the matrix has at most four distinct scales
++    // (KT_MXFP4_SCALE_CODES2, read at load): four groups a byte, a row starts on a byte, code2_row bytes a row.
++    std::unique_ptr<uint8_t[]> code2_store;
++    uint8_t* code2 = nullptr;
++    size_t code2_row = 0;
+     mutable std::atomic<int> code_checked{0};
+ 
+     // KT_MXFP4_SCALE_CODES_VERIFY: once per matrix, at first use.
+@@ -532,6 +540,16 @@ struct GemmKernelAVX2MXFP4 {
+         out[i] = (uint8_t)val[h];
+       }
+       for (int i = nd; i < 256; i++) lut[i] = 0.0f;
++      code2 = nullptr;
++      static const bool two_bit = [] { const char* e = std::getenv("KT_MXFP4_SCALE_CODES2"); return e && e[0] == '1'; }();
++      if (two_bit && nd <= 4) {
++        code2_row = ((size_t)k_group_count + 3) / 4;
++        code2_store.reset(new uint8_t[(size_t)n * code2_row + 8]());
++        for (int r = 0; r < n; r++)
++          for (int g = 0; g < k_group_count; g++)
++            code2_store[(size_t)r * code2_row + (g >> 2)] |= (uint8_t)(out[(size_t)r * k_group_count + g] << ((g & 3) * 2));
++        code2 = code2_store.get();
++      }
+       code_store = std::move(out);
+       code = code_store.get();
+       return true;
+@@ -691,9 +709,14 @@ static void gemm_mxfp4(int m, int n, int k, GemmKernelAVX2MXFP4::BufferA& a, Gem
+     const int* kPerm = GemmKernelAVX2MXFP4::kGroupPerm;
+     static thread_local std::vector<float> a_perm_storage;
+     const float* a_perm = (a.perm != nullptr && a.perm_m >= m) ? a.perm : nullptr;
++    static thread_local uint64_t a_perm_tag = 0;
++    if (a_perm == nullptr && a.perm_tag != 0 && a.perm_tag == a_perm_tag && a_perm_storage.size() >= (size_t)m * k) {
++      a_perm = a_perm_storage.data();
++    }
+     if (a_perm == nullptr) {
+       if (a_perm_storage.size() < (size_t)m * k) a_perm_storage.resize((size_t)m * k);
+       float* tmp = a_perm_storage.data();
++      a_perm_tag = a.perm_tag;
+       if (kt_mxfp4_dec_vconv()) {
+         const __m128i even_odd = _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15);
+         for (int mi = 0; mi < m; mi++) {
+@@ -1303,7 +1326,27 @@ static void gemm_mxfp4(int m, int n, int k, GemmKernelAVX2MXFP4::BufferA& a, Gem
+         KT_MXFP4_PREFETCH_NEXT_ROW(ni)
+         __m256 total0 = _mm256_setzero_ps();
+         __m256 total1 = _mm256_setzero_ps();
+-        if (b.code != nullptr) {
++        if (b.code2 != nullptr) {
++          // Same loop; the scale's index is two bits of a byte that holds four groups.
++          const uint8_t* b_c2 = b.code2 + (size_t)ni * b.code2_row;
++          const float* lut = b.lut;
++          for (int g = 0; g < group_count; g++) {
++            const float* ap = ap_row + g * 32;
++            if (dec_pfs > 0 && (g & 3) == 0) _mm_prefetch((const char*)b_row + (size_t)g * 16 + dec_pfs, _MM_HINT_T0);
++            KT_MXFP4_DECODE_GROUP(b_row, g);
++
++            __m256 gacc = _mm256_mul_ps(_mm256_loadu_ps(ap), w0);
++            gacc = _mm256_fmadd_ps(_mm256_loadu_ps(ap + 8), w1, gacc);
++            gacc = _mm256_fmadd_ps(_mm256_loadu_ps(ap + 16), w2, gacc);
++            gacc = _mm256_fmadd_ps(_mm256_loadu_ps(ap + 24), w3, gacc);
++
++            const __m256 sv = _mm256_broadcast_ss(&lut[(b_c2[g >> 2] >> ((g & 3) * 2)) & 3]);
++            if (g & 1)
++              total1 = _mm256_fmadd_ps(gacc, sv, total1);
++            else
++              total0 = _mm256_fmadd_ps(gacc, sv, total0);
++          }
++        } else if (b.code != nullptr) {
+           if (kt_scale_codes_verify()) b.verify_scale_codes();
+           // Same loop; the scale comes from the matrix's table by index.
+           const uint8_t* b_codes = b.code + (size_t)ni * group_count;

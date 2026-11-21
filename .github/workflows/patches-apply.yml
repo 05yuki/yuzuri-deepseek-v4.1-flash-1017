@@ -54,7 +54,8 @@ jobs:
           git fetch -q --depth 1 https://github.com/kvcache-ai/ktransformers.git "$KT_COMMIT"
           git checkout -q FETCH_HEAD
           for p in kt-kernel-tree kt-kernel-cpu-handoff kt-kernel-expert-cache kt-kernel-gguf \
-                   kt-llamafile-iq2xs kt-llamafile-iquants kt-llamafile-iq4lut kt-kernel-gguf-kernel-guard; do
+                   kt-llamafile-iq2xs kt-llamafile-iquants kt-llamafile-iq4lut kt-kernel-gguf-kernel-guard \
+                   kt-kernel-decode-tasks; do
             git apply --whitespace=nowarn "../patches/$p.patch"
           done
           llama=$(git ls-tree HEAD third_party/llama.cpp | awk '{print $3}')

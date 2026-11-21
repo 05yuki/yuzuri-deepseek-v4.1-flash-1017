@@ -35,6 +35,7 @@ A prebuilt archive holds the same build ([setup.md](setup.md#prebuilt-pieces)).
 | `kt-kernel-cpu-handoff` | The CPU experts run while the GPU works on the same layer. |
 | `kt-kernel-expert-cache` | A cache of the experts in RAM for a NUMA node that cannot hold them all. |
 | `kt-kernel-gguf`, `kt-llamafile-iq2xs`, `kt-llamafile-iquants`, `kt-llamafile-iq4lut`, `kt-kernel-gguf-kernel-guard` | kt-kernel's backend for GGUF experts, its x86 kernels and the check at load. `serve.sh` here does not serve a GGUF pack; the patches keep the build equal to the archive's. |
+| `kt-kernel-decode-tasks` | The CPU experts' decode: the end of a gate+up job is handed out in smaller tasks so the threads finish together, a thread keeps its copy of the input row for the call, and the decode loop reads two-bit scale codes where a matrix holds at most four scales. Bit-identical output. |
 | `kt-kernel-load-prefetch.py` | Changes the installed kt-kernel: each expert layer is read into the page cache in parallel before it is copied. |
 
 `kt-kernel-tree` in parts:

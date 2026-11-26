@@ -145,8 +145,18 @@ fi
 nvcc="$( { [[ -n "$nvcc_bin" ]] && "$nvcc_bin" --version; } 2>/dev/null | sed -n 's/.*release \([0-9.]*\).*/\1/p' | head -1 || true)"
 [[ "$nvcc_bin" == "$here/build/cuda-home/bin/nvcc" && -n "$nvcc" ]] && nvcc="$nvcc (pip wheels, build/cuda-home)"
 recipe="$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo "not a git checkout")"
-sglang="$(sed -n 's/^SGLANG_COMMIT=\([0-9a-f]\{8\}\).*/\1/p' "$here/setup.sh")"
-yuzuri="$(sed -n 's/^YUZURI_COMMIT=\([0-9a-f]\{7\}\).*/\1/p' "$here/setup.sh")"
+# what the checkouts under third_party hold, and the pin in setup.sh when they differ from it
+# (SGLang carries the recipe's patches uncommitted, so its own changes are not marked)
+checkout() { # dir pin-variable length [--dirty]
+  local head pin
+  pin="$(sed -n "s/^$2=\([0-9a-f]\{$3\}\).*/\1/p" "$here/setup.sh")"
+  head="$(git -C "$here/third_party/$1" describe --always --abbrev="$3" --exclude='*' ${4:+"$4"} 2>/dev/null || true)"
+  if [[ -z "$head" ]]; then echo "$pin (setup.sh; third_party/$1 is not a git checkout)"
+  elif [[ "${head%-dirty}" == "$pin" ]]; then echo "$head"
+  else echo "$head, setup.sh pins $pin"; fi
+}
+sglang="$(checkout sglang SGLANG_COMMIT 8)"
+yuzuri="$(checkout yuzuri YUZURI_COMMIT 7 --dirty)"
 index_sha="$(sha256sum "$src/model.safetensors.index.json" 2>/dev/null | cut -c1-12)"
 
 {

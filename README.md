@@ -10,14 +10,14 @@ Run [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/De
 
 ## What is in here
 
-SGLang is the public commit `401d0c79` plus six patches.
+SGLang is the public commit `a9a27e92` plus six patches.
 The six patches change the model's own files: `deepseek_v4.py`, its attention kernels and its KV pool.
 Nothing else in SGLang is patched.
 Everything else that the launch needs comes from Yuzuri's hooks at startup.
 
 | piece | where it comes from |
 |---|---|
-| SGLang | main at `401d0c79`, with `patches/sglang-v41/` (six patches) |
+| SGLang | main at `a9a27e92`, with `patches/sglang-v41/` (six patches) |
 | kt-kernel | KTransformers `ca198c5`, with `patches/kt-*.patch` |
 | Yuzuri | a pinned commit of [05yuki/yuzuri](https://github.com/05yuki/yuzuri), fetched by `setup.sh` |
 | engram row store | `engram-adapter/`, built by `setup.sh` |

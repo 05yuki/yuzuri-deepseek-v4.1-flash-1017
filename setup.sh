@@ -15,7 +15,7 @@
 set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$here"
-SGLANG_COMMIT=401d0c792902115eac9a2ae62e6e11ead80677f0
+SGLANG_COMMIT=a9a27e9255863d44e15a2965b9cf550ffcd19e9b
 KT_COMMIT=ca198c50de70abb6827ba6f573bb6671e54436e2
 YUZURI_REPO="${YUZURI_REPO:-https://github.com/05yuki/yuzuri.git}"
 YUZURI_COMMIT=331b50d20f18dbf7fe30c0ceba36ed1ca98b57bc

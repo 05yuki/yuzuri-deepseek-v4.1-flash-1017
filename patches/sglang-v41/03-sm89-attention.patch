@@ -373,7 +373,7 @@ index 0000000000..623b0e87d8
 +        dim=0,
 +    )
 diff --git a/python/sglang/srt/layers/attention/deepseek_v4_backend.py b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
-index b420e52aa0..d10b0b679d 100644
+index fd68e1f68b..ecbc919daa 100644
 --- a/python/sglang/srt/layers/attention/deepseek_v4_backend.py
 +++ b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
 @@ -258,8 +258,14 @@ def _pad_last_dim(x: T, multiples_of: int = PAGE_INDEX_ALIGNED_SIZE) -> T:
@@ -392,7 +392,7 @@ index b420e52aa0..d10b0b679d 100644
          return None
      from sglang.kernels.ops.attention.flash_mla_interface import get_mla_metadata
  
-@@ -3098,6 +3104,7 @@ class DeepseekV4AttnBackend(
+@@ -3097,6 +3103,7 @@ class DeepseekV4AttnBackend(
              and forward_batch.forward_mode.is_extend_without_speculative()
              and (not cp_active or cp_sparse_prefill)
              and not get_platform().is_sm120
@@ -400,7 +400,7 @@ index b420e52aa0..d10b0b679d 100644
              and self.forward_metadata.late_layer_tail is None
              and (
                  cp_sparse_prefill
-@@ -4578,7 +4585,24 @@ class DeepseekV4AttnBackend(
+@@ -4577,7 +4584,24 @@ class DeepseekV4AttnBackend(
                      extra_topk_lengths,
                  )
  

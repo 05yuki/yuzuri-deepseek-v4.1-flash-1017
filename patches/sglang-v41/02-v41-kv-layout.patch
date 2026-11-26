@@ -144,10 +144,10 @@ index 5cfe505c8d..6776d5579e 100644
      q,
      k_cache,
 diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
-index 4a81199aa0..75df925686 100644
+index a529ff4154..f07792a094 100644
 --- a/python/sglang/srt/environ.py
 +++ b/python/sglang/srt/environ.py
-@@ -2093,6 +2093,8 @@ class Envs:
+@@ -2143,6 +2143,8 @@ class Envs:
      # Compressed-cache layout under "v41": "auto" (fp4 for the fp4-rounded
      # ratio-1 / ratio-2 latents, fp8 for ratios 4 / 128), "fp8" or "fp4" for all.
      SGLANG_DSV4_COMPRESSED_KV_LAYOUT = EnvStr("auto")
@@ -157,10 +157,10 @@ index 4a81199aa0..75df925686 100644
      # bf16 rope pool, 640 B/token instead of 1024. The unified pool takes no
      # dtype, so --kv-cache-dtype has no effect there and this switch is the
 diff --git a/python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py b/python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py
-index da74328e86..0d3a28d6f4 100644
+index 150c1c0087..ed42dfcd74 100644
 --- a/python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py
 +++ b/python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py
-@@ -239,10 +239,25 @@ def select_dsv4_kv_layout() -> Tuple[KVLayout, Optional[str]]:
+@@ -240,10 +240,25 @@ def select_dsv4_kv_layout() -> Tuple[KVLayout, Optional[str]]:
                  "which reads the block-split v41 layout"
              )
          return KVLayout.V41, option

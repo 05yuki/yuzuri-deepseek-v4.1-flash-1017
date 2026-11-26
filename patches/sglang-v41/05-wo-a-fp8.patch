@@ -106,7 +106,7 @@ index 0000000000..8ff875faee
 +                                                     BLOCK_R=32, BLOCK_D=128, num_warps=4)
 +    return out
 diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
-index 644168261c..7d52fd25a1 100644
+index dfc230e450..9ff21712e6 100644
 --- a/python/sglang/srt/models/deepseek_v4.py
 +++ b/python/sglang/srt/models/deepseek_v4.py
 @@ -526,6 +526,68 @@ def _o_fp8_qdq_block() -> int:
@@ -178,7 +178,7 @@ index 644168261c..7d52fd25a1 100644
  def _apply_wo_a_bf16_matmul(
      o: torch.Tensor,
      wo_a: torch.Tensor,
-@@ -1114,6 +1176,16 @@ class MqaAttentionBase(nn.Module):
+@@ -1124,6 +1186,16 @@ class MqaAttentionBase(nn.Module):
          else:
              wo_a_quant_config = None
  
@@ -195,7 +195,7 @@ index 644168261c..7d52fd25a1 100644
          self.fuse_wqa_wkv = fuse
          self.wo_a_fp8 = fp8
  
-@@ -1159,8 +1231,17 @@ class MqaAttentionBase(nn.Module):
+@@ -1169,8 +1241,17 @@ class MqaAttentionBase(nn.Module):
              quant_config=wo_a_quant_config,
              prefix=add_prefix("wo_a", prefix),
              parallel_group="attn_tp",
@@ -214,7 +214,7 @@ index 644168261c..7d52fd25a1 100644
          if quantize_wo_a:
              assert hasattr(self.wo_a, "weight_scale_inv"), (
                  "FP8 quant_config must create weight_scale_inv"
-@@ -3159,7 +3240,20 @@ class MQALayer(MqaAttentionBase):
+@@ -3185,7 +3266,20 @@ class MQALayer(MqaAttentionBase):
  
                      o = o_fp8_qdq_(o, _O_FP8_QDQ_BLOCK)
                  wo_a_weight = getattr(self.wo_a, "weight", None)
@@ -236,8 +236,8 @@ index 644168261c..7d52fd25a1 100644
                      if (
                          _NPU_BF16_WO_A_GEMM
                          and forward_batch.forward_mode.is_decode()
-@@ -5382,6 +5476,8 @@ class DeepseekV4ForCausalLM(
-                 attn.wo_a.weight_scale_inv.format_ue8m0 = False
+@@ -5493,6 +5587,8 @@ class DeepseekV4ForCausalLM(
+         logger.info("Loaded ModelSlim Engram gate rotation from %s", path)
  
      def post_load_weights(self, is_nextn=False, weight_names=None):
 +        if not is_nextn:
@@ -245,7 +245,7 @@ index 644168261c..7d52fd25a1 100644
          if self.wo_a_fp8:
              self._setup_fp8_wo_a_scales(is_nextn)
  
-@@ -6095,6 +6191,9 @@ def _prepare_deepseek_v4_weights(
+@@ -6209,6 +6305,9 @@ def _prepare_deepseek_v4_weights(
          return weights
      if quant_config is not None and quant_config.get_name() == "quark":
          weights = _rename_quark_fp8_block_scales(weights)

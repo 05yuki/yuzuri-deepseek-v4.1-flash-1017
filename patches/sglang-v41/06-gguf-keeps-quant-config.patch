@@ -12,10 +12,10 @@ without it the layers are built as plain bf16 and the GGUF bytes do not load.
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
-index 7d52fd25a1..deb9ff84ad 100644
+index 9ff21712e6..a066805d3f 100644
 --- a/python/sglang/srt/models/deepseek_v4.py
 +++ b/python/sglang/srt/models/deepseek_v4.py
-@@ -1166,7 +1166,7 @@ class MqaAttentionBase(nn.Module):
+@@ -1176,7 +1176,7 @@ class MqaAttentionBase(nn.Module):
          quantize_wo_a = fp8 or self.use_npu_arch35_mxfp8_wo_a
          if wo_a_keeps_quant_config is None:
              keep_source_quant = (
@@ -24,7 +24,7 @@ index 7d52fd25a1..deb9ff84ad 100644
              )
              wo_a_quant_config: Optional[QuantizationConfig] = (
                  quant_config if quantize_wo_a or keep_source_quant else None
-@@ -4034,7 +4034,7 @@ class DeepseekV4Model(nn.Module):
+@@ -4060,7 +4060,7 @@ class DeepseekV4Model(nn.Module):
          if self.pp_group.is_first_rank:
              embedding_quant_config = (
                  quant_config

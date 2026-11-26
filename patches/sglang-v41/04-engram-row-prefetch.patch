@@ -26,29 +26,33 @@ Prerequisites: none; applies alone on tier 0.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01C2UBZdnrDZSBh8yQz8rc9g
 ---
- python/sglang/srt/layers/engram.py      |  6 ++
- python/sglang/srt/models/deepseek_v4.py | 75 ++++++++++++++++++++++---
- 2 files changed, 74 insertions(+), 7 deletions(-)
+ python/sglang/srt/layers/engram.py      | 10 +++
+ python/sglang/srt/models/deepseek_v4.py | 82 ++++++++++++++++++++++---
+ 2 files changed, 83 insertions(+), 9 deletions(-)
 
 diff --git a/python/sglang/srt/layers/engram.py b/python/sglang/srt/layers/engram.py
-index a199b8414b..0f1547e7a4 100644
+index aa59ce4f22..c9b71d1655 100644
 --- a/python/sglang/srt/layers/engram.py
 +++ b/python/sglang/srt/layers/engram.py
-@@ -1775,6 +1775,12 @@ class Engram(nn.Module):
+@@ -1872,6 +1872,16 @@ class Engram(nn.Module):
              # Nothing to gate, and the MXFP8 quantize behind wkv rejects an
              # empty M.
              return x
-+        return self.gate_rows(x, emb, input_ids)
++        return self.gate_rows(x, emb, input_ids, gate_basis=gate_basis)
 +
 +    def gate_rows(
-+        self, x: torch.Tensor, emb: torch.Tensor, input_ids: torch.Tensor
++        self,
++        x: torch.Tensor,
++        emb: torch.Tensor,
++        input_ids: torch.Tensor,
++        gate_basis: torch.Tensor | None = None,
 +    ) -> torch.Tensor:
 +        """The layer's output from its looked-up rows `emb` (the tail of forward)."""
          kv, _ = self.wkv(emb.flatten(-2))
          image_ids = input_ids if self.image_token_id is not None else None
          return engram_gate(
 diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
-index a7e9a4594f..644168261c 100644
+index 9baa75ad6b..dfc230e450 100644
 --- a/python/sglang/srt/models/deepseek_v4.py
 +++ b/python/sglang/srt/models/deepseek_v4.py
 @@ -3,6 +3,7 @@ from __future__ import annotations
@@ -59,7 +63,7 @@ index a7e9a4594f..644168261c 100644
  import time
  from array import array
  from contextlib import contextmanager, nullcontext
-@@ -4031,6 +4032,26 @@ class DeepseekV4Model(nn.Module):
+@@ -4057,6 +4058,26 @@ class DeepseekV4Model(nn.Module):
                  self.engram_layout,
                  image_token_id=_engram_image_token_id(config),
              )
@@ -86,7 +90,7 @@ index a7e9a4594f..644168261c 100644
  
          if not _is_cuda:
              self.use_fused_mhc_post_pre = (
-@@ -4192,6 +4213,37 @@ class DeepseekV4Model(nn.Module):
+@@ -4218,6 +4239,37 @@ class DeepseekV4Model(nn.Module):
                  bcg_deepseek_v4_engram_hash_ids(self.engram_hasher, input_ids, hash_ids)
              else:
                  hash_ids = self.engram_hasher(input_ids, forward_batch)
@@ -124,7 +128,7 @@ index a7e9a4594f..644168261c 100644
          tail = None
          if (
              self.late_layer_start is not None
-@@ -4369,13 +4421,22 @@ class DeepseekV4Model(nn.Module):
+@@ -4396,16 +4448,28 @@ class DeepseekV4Model(nn.Module):
              if engram is not None:
                  # No local name holds the pre-Engram residual: it would stay alive
                  # until the next Engram layer.
@@ -134,7 +138,12 @@ index a7e9a4594f..644168261c 100644
 -                    forward_batch,
 -                    input_ids=input_ids,
 -                    cp_all_tokens=cp_extend,
--                )
+-                    gate_basis=(
+-                        getattr(self, "engram_gate_basis", None) if _is_npu else None
+-                    ),
++                gate_basis = (
++                    getattr(self, "engram_gate_basis", None) if _is_npu else None
+                 )
 +                if i in prefetched_rows:
 +                    rows, ev = prefetched_rows.pop(i)
 +                    main_stream = torch.cuda.current_stream()
@@ -142,7 +151,9 @@ index a7e9a4594f..644168261c 100644
 +                    rows.record_stream(main_stream)
 +                    if engram.embed.tp_size > 1:
 +                        rows = engram.embed._reduce_owned_rows(rows)
-+                    hidden_states = engram.gate_rows(state.residual, rows, input_ids)
++                    hidden_states = engram.gate_rows(
++                        state.residual, rows, input_ids, gate_basis=gate_basis
++                    )
 +                else:
 +                    hidden_states = engram(
 +                        state.residual,
@@ -150,6 +161,7 @@ index a7e9a4594f..644168261c 100644
 +                        forward_batch,
 +                        input_ids=input_ids,
 +                        cp_all_tokens=cp_extend,
++                        gate_basis=gate_basis,
 +                    )
                  state = state.with_residual(hidden_states)
                  if _is_cuda:

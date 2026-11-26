@@ -221,13 +221,16 @@ def install(module):
 
     module.EngramHasher.__init__ = init_hasher
 
-    def init(self, num_embeddings, dim, layer_id, column_bounds=None, *, mxfp4=False):
+    def init(self, num_embeddings, dim, layer_id, column_bounds=None, *, mxfp4=False, storage=None):
         torch.nn.Module.__init__(self)
         assert dim == DIM, dim
-        # SGLang main since #47935 keeps a checkpoint's MXFP4 table packed; the row store reads
-        # the fp8 rows of the 1017 checkpoint only
+        # SGLang main since #47935 keeps a checkpoint's MXFP4 table packed, and since #50205 a
+        # checkpoint's quantization config may declare ModelSlim INT8 rows (storage); the row store
+        # reads the fp8 rows of the 1017 checkpoint only
         if mxfp4:
             raise ValueError("engram adapter: MXFP4 Engram tables are not supported, fp8 only")
+        if storage is not None:
+            raise ValueError(f"engram adapter: INT8 Engram storage {storage} is not supported, fp8 only")
         self.mxfp4, self.row_bytes = False, dim
         par = module.get_parallel()
         self.dim, self.tp_size = dim, par.tp_size
@@ -406,6 +409,14 @@ def install(module):
             raise RuntimeError(f"engram row store reported {st['errors']} failed lookups: {st}")
         return st
 
+    # Every parameter SGLang's own __init__ takes must be one the adapter's takes too: a new
+    # one upstream (as #50205's storage was) fails here, at install, not at the first layer
+    import inspect
+
+    theirs = set(inspect.signature(cls.__init__).parameters) - {"self"}
+    ours = set(inspect.signature(init).parameters) - {"self"}
+    if theirs - ours:
+        raise TypeError(f"engram adapter: EngramEmbedding.__init__ takes {sorted(theirs - ours)}, the adapter does not")
     cls.__init__ = init
     cls._owned_rows = owned
     cls._iq4nl_rows = _iq4nl_rows

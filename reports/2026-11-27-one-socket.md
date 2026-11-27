@@ -1,6 +1,6 @@
 # Qualification report
 
-2026-11-27, `tools/qualify.sh` at `0e5517c` (SGLang `a9a27e92`, Yuzuri `fb71bdd`).
+2026-11-27, `tools/qualify.sh` at `3d1043a` (SGLang `a9a27e92`, Yuzuri `0da581f`).
 
 ## Machine
 
@@ -15,24 +15,24 @@
 
 | check | result | detail |
 |---|---|---|
-| answer | pass | 217 characters |
+| answer | pass | 248 characters |
 | tool calls | pass | 4 of 4 passed |
-| NLL | pass | served 0.7181, minus reference -0.0004, SE 0.0032 over 24 pieces (z -0.13); mean \|diff\| a token 0.1187; 628 of 11496 tokens identical |
-| prefix cache | pass | first 41.4 s, again 5.9 s with 34816 of 35000 tokens from the cache |
+| NLL | pass | served 0.7160, minus reference -0.0025, SE 0.0039 over 24 pieces (z -0.65); mean \|diff\| a token 0.1188; 652 of 11496 tokens identical |
+| prefix cache | pass | first 35.3 s, again 6.3 s with 34816 of 35000 tokens from the cache |
 
 ## Measured
 
-- server up after 193 s; hot slots at the first lend: 221
+- server up after 204 s; hot slots at the first lend: 217
 ```
-decode median: 22.0 tok/s
-prefill, first 35000-token prompt: 42.33 s = 827 tok/s
-prefill, second 35000-token prompt: 41.43 s = 845 tok/s
-decode, Chinese prose: 1024 tokens in 52.4 s = 19.5 tok/s
-decode, English prose: 1024 tokens in 56.3 s = 18.2 tok/s
-decode, English technical prose: 1024 tokens in 63.0 s = 16.2 tok/s
-decode, math: 1024 tokens in 54.5 s = 18.8 tok/s
-decode, JSON: 1024 tokens in 59.1 s = 17.3 tok/s
-decode, Python code: 1024 tokens in 65.9 s = 15.5 tok/s
+decode median: 23.0 tok/s
+prefill, first 35000-token prompt: 35.40 s = 989 tok/s
+prefill, second 35000-token prompt: 35.39 s = 989 tok/s
+decode, Chinese prose: 1024 tokens in 52.1 s = 19.7 tok/s
+decode, English prose: 1024 tokens in 57.9 s = 17.7 tok/s
+decode, English technical prose: 1024 tokens in 64.3 s = 15.9 tok/s
+decode, math: 959 tokens in 52.9 s = 18.1 tok/s
+decode, JSON: 1024 tokens in 59.5 s = 17.2 tok/s
+decode, Python code: 1024 tokens in 67.3 s = 15.2 tok/s
 ```
 
 ## Launch

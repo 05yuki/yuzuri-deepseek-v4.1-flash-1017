@@ -90,13 +90,13 @@ One request at a time.
 
 | | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| decode, Japanese prose, median of four prompts | 58.2 tok/s | 40.6 tok/s | 22.0 tok/s |
-| prefill, 35,000 tokens | 19.7 s (1,780 tok/s) | 27.2 s (1,289 tok/s) | 42.3 s (827 tok/s) |
-| the same prompt again, from the prefix cache | 2.0 s | 2.1 s | 5.9 s |
-| server up after | 198 s | 208 s | 193 s |
-| hot expert slots at the first lend | 868 | 206 | 221 |
-| NLL, served | 0.7191 | 0.7187 | 0.7181 |
-| NLL, served minus reference | +0.0006 (SE 0.0040) | +0.0001 (SE 0.0032) | -0.0004 (SE 0.0032) |
+| decode, Japanese prose, median of four prompts | 58.4 tok/s | 40.9 tok/s | 23.0 tok/s |
+| prefill, 35,000 tokens | 11.5 s (3,032 tok/s) | 19.9 s (1,757 tok/s) | 35.4 s (989 tok/s) |
+| the same prompt again, from the prefix cache | 2.0 s | 2.1 s | 6.3 s |
+| server up after | 196 s | 206 s | 195 s |
+| hot expert slots at the first lend | 889 | 217 | 217 |
+| NLL, served | 0.7179 | 0.7205 | 0.7160 |
+| NLL, served minus reference | -0.0007 (SE 0.0030) | +0.0019 (SE 0.0038) | -0.0025 (SE 0.0039) |
 
 - The three reports are in [reports/](reports/).
 - The server-up times are of launches after the first.
@@ -114,12 +114,12 @@ Decode by kind of text:
 
 | text | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| Chinese prose | 51.3 tok/s | 35.9 tok/s | 19.5 tok/s |
-| English prose | 47.5 tok/s | 34.4 tok/s | 18.2 tok/s |
-| English technical prose | 41.7 tok/s | 33.3 tok/s | 16.2 tok/s |
-| math | 45.8 tok/s | 34.4 tok/s | 18.8 tok/s |
-| JSON | 45.2 tok/s | 33.4 tok/s | 17.3 tok/s |
-| Python code | 41.2 tok/s | 32.5 tok/s | 15.5 tok/s |
+| Chinese prose | 51.7 tok/s | 35.6 tok/s | 19.7 tok/s |
+| English prose | 46.3 tok/s | 34.8 tok/s | 17.7 tok/s |
+| English technical prose | 41.7 tok/s | 32.9 tok/s | 15.9 tok/s |
+| math | 46.2 tok/s | 34.5 tok/s | 18.1 tok/s |
+| JSON | 44.3 tok/s | 33.4 tok/s | 17.2 tok/s |
+| Python code | 41.5 tok/s | 32.5 tok/s | 15.2 tok/s |
 
 - The hot experts on the GPU are swapped for the ones the text being written routes to most.
 - Code, JSON, math and English spread their routes over more experts than Japanese prose, so the CPU computes more of them.
@@ -131,10 +131,10 @@ No prompt shares a prefix with the one before it.
 
 | prompt | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| 65,536 tokens | 31.2 s (2,098 tok/s) | 44.0 s (1,489 tok/s) | 74.1 s (885 tok/s) |
-| 131,072 tokens | 62.1 s (2,112 tok/s) | 91.9 s (1,427 tok/s) | 144.6 s (907 tok/s) |
-| 524,288 tokens | 219.5 s (2,389 tok/s) | 351.8 s (1,490 tok/s) | 568.8 s (922 tok/s) |
-| 1,000,000 tokens | 450.9 s (2,218 tok/s) | 713.7 s (1,401 tok/s) | 1,196.5 s (836 tok/s) |
+| 65,536 tokens | 16.3 s (4,029 tok/s) | 38.5 s (1,704 tok/s) | 69.4 s (945 tok/s) |
+| 131,072 tokens | 32.9 s (3,982 tok/s) | 76.0 s (1,726 tok/s) | 137.4 s (954 tok/s) |
+| 524,288 tokens | 134.1 s (3,909 tok/s) | 268.1 s (1,956 tok/s) | 515.1 s (1,018 tok/s) |
+| 1,000,000 tokens | 276.2 s (3,621 tok/s) | 527.6 s (1,895 tok/s) | 1,022.0 s (978 tok/s) |
 
 ### Prefill and the drive
 
@@ -144,10 +144,10 @@ The NVMe drive's random read rate limits the prefill.
 - Rows already read stay in an 8 GiB cache in RAM.
 - A prompt of random token ids misses that cache on every row.
 - One such prompt of 35,000 tokens takes about 1.86 million reads.
-- The drive here has no DRAM, and its random read rate falls as the span of the file being read grows: 249,000 reads a second over a 7 GB file, 143,000 over one 101 GB engram shard.
-- A 35,000-token prompt that needs no reads from the drive (one token repeated) prefills in 17.5 s on two GPUs and 25.7 s on one.
-- The drive therefore adds about 2 s to the two-GPU prefill above, and 1 to 2 s on one GPU.
-- 17.5 s and 25.7 s are what a faster drive can approach; no other drive has been measured.
+- Prefill reads are offset-sorted, deduplicated and issued at high queue depth while the next chunk warms in the background, so subsequent chunks hit the cache at ~98.7%.
+- A 35,000-token prompt that needs no reads from the drive (one token repeated) prefills in 10.7 s on two GPUs and 19.3 s on one.
+- The drive therefore adds about 0.8 s to the two-GPU prefill above, and 0.6 s on one GPU.
+- 10.7 s and 19.3 s are what a faster drive can approach; no other drive has been measured.
 
 The state of the drive matters as well.
 

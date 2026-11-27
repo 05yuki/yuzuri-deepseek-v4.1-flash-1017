@@ -1,0 +1,194 @@
+--- a/kt-kernel/operators/common.hpp
++++ b/kt-kernel/operators/common.hpp
+@@ -290,6 +290,12 @@
+   std::vector<std::vector<void*>> gate_zeros;
+   std::vector<std::vector<void*>> up_zeros;
+   std::vector<std::vector<void*>> down_zeros;
++  // kt-nvfp4-scale-codes.py: with scale_codes, *_scales hold one-byte e4m3 codes
++  // and *_scale_luts a float[256] per expert matrix (e4m3 value x global scale)
++  bool scale_codes = false;
++  std::vector<std::vector<void*>> gate_scale_luts;
++  std::vector<std::vector<void*>> up_scale_luts;
++  std::vector<std::vector<void*>> down_scale_luts;
+ 
+   // Pre-quantized backward weights (transposed, in BufferB format) [tp_count][expert_id]
+   std::vector<std::vector<void*>> gate_bwd_projs;
+--- a/kt-kernel/ext_bindings.cpp
++++ b/kt-kernel/ext_bindings.cpp
+@@ -950,6 +950,10 @@
+       .DEF_PTR_2D_PROPERTY(GeneralMOEConfig, up_scales)
+       .DEF_PTR_2D_PROPERTY(GeneralMOEConfig, down_scales)
+ 
++      .def_readwrite("scale_codes", &GeneralMOEConfig::scale_codes)  // kt-nvfp4-scale-codes.py
++      .DEF_PTR_2D_PROPERTY(GeneralMOEConfig, gate_scale_luts)
++      .DEF_PTR_2D_PROPERTY(GeneralMOEConfig, up_scale_luts)
++      .DEF_PTR_2D_PROPERTY(GeneralMOEConfig, down_scale_luts)
+       .DEF_PTR_2D_PROPERTY(GeneralMOEConfig, gate_zeros)
+       .DEF_PTR_2D_PROPERTY(GeneralMOEConfig, up_zeros)
+       .DEF_PTR_2D_PROPERTY(GeneralMOEConfig, down_zeros)
+--- a/kt-kernel/operators/avx2/mxfp4-moe.hpp
++++ b/kt-kernel/operators/avx2/mxfp4-moe.hpp
+@@ -45,6 +45,13 @@
+   }();
+   return on;
+ }
++static inline bool kt_scale_arena_codes() {
++  static const bool on = [] {
++    const char* e = std::getenv("KT_SCALE_ARENA_CODES");
++    return e && e[0] == '1';
++  }();
++  return on;
++}
+ static inline void bf16_to_e8m0(uint8_t* dst, const ggml_bf16_t* src, size_t count) {
+   const uint16_t* s = reinterpret_cast<const uint16_t*>(src);
+   for (size_t i = 0; i < count; i++) dst[i] = (uint8_t)((s[i] >> 7) & 0xFF);
+@@ -455,7 +462,9 @@
+   struct BufferB {
+     uint8_t* b = nullptr;    // nibble-packed FP4 (may be nullptr in scale-only mode)
+     float* d = nullptr;      // FP32 group scales (null when d_u8 holds 1-byte E8M0)
+-    uint8_t* d_u8 = nullptr; // 1-byte E8M0 group scales (KT_MXFP4_SCALE_ARENA_E8M0=1)
++    uint8_t* d_u8 = nullptr;       // 1-byte E8M0 group scales (KT_MXFP4_SCALE_ARENA_E8M0=1)
++    uint8_t* arena_code = nullptr; // 1-byte E4M3 codes in arena (KT_SCALE_ARENA_CODES=1)
++    float* arena_lut = nullptr;    // 256-entry fp32 LUT following arena_code
+     int n = 0, k = 0, k_group_size = 0, k_group_count = 0;
+ 
+     BufferB() = default;
+@@ -475,7 +484,13 @@
+       if (k_group_size <= 0 || k % k_group_size != 0 || k % 8 != 0)
+         throw std::runtime_error("MXFP4 AVX2 requires k % group_size == 0 and k % 8 == 0");
+       k_group_count = k / k_group_size;
+-      if (kt_mxfp4_scale_arena_e8m0() && k_group_size == 32) {
++      if (kt_scale_arena_codes() && k_group_size == 16) {
++        const size_t cnt = (size_t)n * k_group_count;
++        arena_code = (uint8_t*)scale_ptr;
++        arena_lut = (float*)(arena_code + ((cnt + 63) & ~size_t(63)));
++        d = nullptr;
++        d_u8 = nullptr;
++      } else if (kt_mxfp4_scale_arena_e8m0() && k_group_size == 32) {
+         d_u8 = (uint8_t*)scale_ptr;
+         d = nullptr;
+       } else {
+@@ -488,8 +503,12 @@
+       return n * k / 2 + n * (k / k_group_size) * sizeof(float);
+     }
+     static size_t required_size_scale_only(size_t n, size_t k, int k_group_size) {
++      const size_t cnt = n * (k / k_group_size);
++      if (kt_scale_arena_codes() && k_group_size == 16) {
++        return ((cnt + 63) & ~size_t(63)) + 256 * sizeof(float);
++      }
+       const size_t elem = (kt_mxfp4_scale_arena_e8m0() && k_group_size == 32) ? sizeof(uint8_t) : sizeof(float);
+-      return n * (k / k_group_size) * elem;
++      return cnt * elem;
+     }
+ 
+     // One-byte scale codes (KT_MXFP4_SCALE_CODES). lut holds this matrix's
+@@ -547,6 +566,10 @@
+       if (n <= 0 || k_group_count <= 0) return false;
+       const size_t cnt = (size_t)n * k_group_count;
+       static const bool two_bit = [] { const char* e = std::getenv("KT_MXFP4_SCALE_CODES2"); return e && e[0] == '1'; }();
++      if (arena_code != nullptr) {
++        code = arena_code;
++        return true;
++      }
+       if (d_u8 != nullptr) {
+         // Zero-copy 1-byte E8M0 scale arena: code points directly to d_u8 (0 bytes code_store!).
+         for (int e = 0; e < 256; e++) {
+@@ -614,6 +637,26 @@
+       return true;
+     }
+ 
++    // kt-nvfp4-scale-codes.py: populate scales from 1-byte e4m3 codes + float[256] LUT
++    void codes_in(const uint8_t* src, size_t src_stride, size_t col_off, const float* table) {
++      const size_t g = (size_t)k_group_count;
++      if (arena_code != nullptr) {
++        for (int r = 0; r < n; r++)
++          std::memcpy(arena_code + (size_t)r * g, src + (size_t)r * src_stride + col_off, g);
++        std::memcpy(arena_lut, table, 256 * sizeof(float));
++        std::memcpy(lut, table, 256 * sizeof(float));
++        code = arena_code;
++        d = nullptr;
++        return;
++      }
++      if (d == nullptr) throw std::runtime_error("kt-nvfp4-scale-codes: no scale storage");
++      for (int r = 0; r < n; r++) {
++        const uint8_t* s = src + (size_t)r * src_stride + col_off;
++        float* o = d + (size_t)r * g;
++        for (size_t i = 0; i < g; i++) o[i] = table[s[i]];
++      }
++    }
++
+     void from_raw_mat(const uint8_t* proj, int ith, int nth) {
+       if (b == nullptr) return;
+       auto [n_start, n_end] = split_range(n, ith, nth);
+@@ -2023,7 +2066,15 @@
+               return;
+             size_t scale_elem_count = ((size_t)config_.hidden_size * config_.intermediate_size) / group_size;
+             // tp_part_idx == 0 guaranteed here, so offset is 0
+-            if (gate_bb_[expert_idx]->d_u8 != nullptr) {
++            if (config_.scale_codes) {  // kt-nvfp4-scale-codes.py
++              const size_t gu = config_.hidden_size / group_size, dn = config_.intermediate_size / group_size;
++              gate_bb_[expert_idx]->codes_in((const uint8_t*)config_.gate_scales[0][lid], gu, 0,
++                                             (const float*)config_.gate_scale_luts[0][lid]);
++              up_bb_[expert_idx]->codes_in((const uint8_t*)config_.up_scales[0][lid], gu, 0,
++                                           (const float*)config_.up_scale_luts[0][lid]);
++              down_bb_[expert_idx]->codes_in((const uint8_t*)config_.down_scales[0][lid], dn, 0,
++                                             (const float*)config_.down_scale_luts[0][lid]);
++            } else if (gate_bb_[expert_idx]->d_u8 != nullptr) {
+               bf16_to_e8m0(gate_bb_[expert_idx]->d_u8, (const ggml_bf16_t*)config_.gate_scales[0][lid], scale_elem_count);
+               bf16_to_e8m0(up_bb_[expert_idx]->d_u8, (const ggml_bf16_t*)config_.up_scales[0][lid], scale_elem_count);
+               bf16_to_e8m0(down_bb_[expert_idx]->d_u8, (const ggml_bf16_t*)config_.down_scales[0][lid], scale_elem_count);
+@@ -2095,8 +2146,18 @@
+   }
+   template <typename BB>
+   static inline void export_scales_bf16(ggml_bf16_t* dst, const BB* bb, size_t off, size_t count) {
+-    if (bb->d_u8 != nullptr) e8m0_to_bf16(dst, bb->d_u8 + off, count);
+-    else fp32_to_bf16(dst, bb->d + off, count);
++    if (bb->arena_code != nullptr) {
++      static thread_local std::vector<float> tmp;
++      if (tmp.size() < count) tmp.resize(count);
++      const uint8_t* c = bb->arena_code + off;
++      const float* tab = bb->arena_lut;
++      for (size_t i = 0; i < count; i++) tmp[i] = tab[c[i]];
++      fp32_to_bf16(dst, tmp.data(), count);
++    } else if (bb->d_u8 != nullptr) {
++      e8m0_to_bf16(dst, bb->d_u8 + off, count);
++    } else {
++      fp32_to_bf16(dst, bb->d + off, count);
++    }
+   }
+ 
+   void write_weights_to_buffer(int gpu_tp_count, int cpu_tp_count, int expert_id, const GeneralMOEConfig& full_config,
+@@ -2369,7 +2430,13 @@
+               if (config.gate_scales[0][lid] == nullptr || config.up_scales[0][lid] == nullptr) {
+                 throw std::runtime_error("TP_MOE load_weights: null scale pointer for expert " + std::to_string(lid));
+               }
+-              if (tp->gate_bb_[eid]->d_u8 != nullptr) {
++              if (config.scale_codes) {  // kt-nvfp4-scale-codes.py
++                const size_t gu = tpc.hidden_size / group_size;
++                tp->gate_bb_[eid]->codes_in((const uint8_t*)config.gate_scales[0][lid] + scale_off, gu, 0,
++                                            (const float*)config.gate_scale_luts[0][lid]);
++                tp->up_bb_[eid]->codes_in((const uint8_t*)config.up_scales[0][lid] + scale_off, gu, 0,
++                                          (const float*)config.up_scale_luts[0][lid]);
++              } else if (tp->gate_bb_[eid]->d_u8 != nullptr) {
+                 bf16_to_e8m0(tp->gate_bb_[eid]->d_u8, (const ggml_bf16_t*)config.gate_scales[0][lid] + scale_off,
+                              scale_count);
+                 bf16_to_e8m0(tp->up_bb_[eid]->d_u8, (const ggml_bf16_t*)config.up_scales[0][lid] + scale_off,
+@@ -2398,6 +2465,10 @@
+               }
+               int full_interm_groups = full_interm / group_size;
+               int per_tp_groups = per_tp_interm / group_size;
++              if (config.scale_codes) {  // kt-nvfp4-scale-codes.py
++                tp->down_bb_[eid]->codes_in((const uint8_t*)config.down_scales[0][lid], full_interm_groups,
++                                            (size_t)i * per_tp_groups, (const float*)config.down_scale_luts[0][lid]);
++              } else {
+               const ggml_bf16_t* src_ds = (const ggml_bf16_t*)config.down_scales[0][lid];
+               if (tp->down_bb_[eid]->d_u8 != nullptr) {
+                 uint8_t* dst_ds = tp->down_bb_[eid]->d_u8;
+@@ -2412,6 +2483,7 @@
+                                   src_ds + (size_t)row * full_interm_groups + (size_t)i * per_tp_groups, per_tp_groups);
+                 }
+               }
++              }
+             },
+             nullptr);
+       });

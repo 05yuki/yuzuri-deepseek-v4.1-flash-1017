@@ -18,12 +18,12 @@ cd "$here"
 SGLANG_COMMIT=a9a27e9255863d44e15a2965b9cf550ffcd19e9b
 KT_COMMIT=ca198c50de70abb6827ba6f573bb6671e54436e2
 YUZURI_REPO="${YUZURI_REPO:-https://github.com/05yuki/yuzuri.git}"
-YUZURI_COMMIT=0da581fd4e0fd5c5079815dda61df4005627be1b
+YUZURI_COMMIT=8cec44e0dd09724ff5bf27843f44463b45b90b33
 sglang_patches=()
 for f in "$here"/patches/sglang-v41/[0-9][0-9]-*.patch; do sglang_patches+=("sglang-v41/$(basename "$f")"); done
 kt_patches=(kt-kernel-tree.patch kt-kernel-cpu-handoff.patch kt-kernel-expert-cache.patch kt-kernel-gguf.patch
             kt-llamafile-iq2xs.patch kt-llamafile-iquants.patch kt-llamafile-iq4lut.patch
-            kt-kernel-gguf-kernel-guard.patch kt-kernel-decode-tasks.patch)
+            kt-kernel-gguf-kernel-guard.patch kt-kernel-decode-tasks.patch kt-kernel-mxfp4-e8m0-arena.patch)
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 mkdir -p third_party build state
 step() { printf '\n== %s\n' "$*"; }

@@ -1,0 +1,310 @@
+--- a/kt-kernel/operators/avx2/mxfp4-moe.hpp
++++ b/kt-kernel/operators/avx2/mxfp4-moe.hpp
+@@ -38,6 +38,21 @@
+   const char* e = std::getenv("KT_MXFP4_SCALE_CODES");
+   return e && e[0] == '1';
+ }
++static inline bool kt_mxfp4_scale_arena_e8m0() {
++  static const bool on = [] {
++    const char* e = std::getenv("KT_MXFP4_SCALE_ARENA_E8M0");
++    return e && e[0] == '1';
++  }();
++  return on;
++}
++static inline void bf16_to_e8m0(uint8_t* dst, const ggml_bf16_t* src, size_t count) {
++  const uint16_t* s = reinterpret_cast<const uint16_t*>(src);
++  for (size_t i = 0; i < count; i++) dst[i] = (uint8_t)((s[i] >> 7) & 0xFF);
++}
++static inline void e8m0_to_bf16(ggml_bf16_t* dst, const uint8_t* src, size_t count) {
++  uint16_t* d = reinterpret_cast<uint16_t*>(dst);
++  for (size_t i = 0; i < count; i++) d[i] = (uint16_t)((uint16_t)src[i] << 7);
++}
+ static inline bool kt_scale_codes_verify() {
+   static const bool v = [] { const char* e = std::getenv("KT_MXFP4_SCALE_CODES_VERIFY"); return e && e[0] == '1'; }();
+   return v;
+@@ -438,8 +453,9 @@
+   };
+ 
+   struct BufferB {
+-    uint8_t* b = nullptr;  // nibble-packed FP4 (may be nullptr in scale-only mode)
+-    float* d = nullptr;    // FP32 group scales
++    uint8_t* b = nullptr;    // nibble-packed FP4 (may be nullptr in scale-only mode)
++    float* d = nullptr;      // FP32 group scales (null when d_u8 holds 1-byte E8M0)
++    uint8_t* d_u8 = nullptr; // 1-byte E8M0 group scales (KT_MXFP4_SCALE_ARENA_E8M0=1)
+     int n = 0, k = 0, k_group_size = 0, k_group_count = 0;
+ 
+     BufferB() = default;
+@@ -459,14 +475,21 @@
+       if (k_group_size <= 0 || k % k_group_size != 0 || k % 8 != 0)
+         throw std::runtime_error("MXFP4 AVX2 requires k % group_size == 0 and k % 8 == 0");
+       k_group_count = k / k_group_size;
+-      d = (float*)scale_ptr;
++      if (kt_mxfp4_scale_arena_e8m0() && k_group_size == 32) {
++        d_u8 = (uint8_t*)scale_ptr;
++        d = nullptr;
++      } else {
++        d = (float*)scale_ptr;
++        d_u8 = nullptr;
++      }
+     }
+ 
+     static size_t required_size(size_t n, size_t k, int k_group_size) {
+       return n * k / 2 + n * (k / k_group_size) * sizeof(float);
+     }
+     static size_t required_size_scale_only(size_t n, size_t k, int k_group_size) {
+-      return n * (k / k_group_size) * sizeof(float);
++      const size_t elem = (kt_mxfp4_scale_arena_e8m0() && k_group_size == 32) ? sizeof(uint8_t) : sizeof(float);
++      return n * (k / k_group_size) * elem;
+     }
+ 
+     // One-byte scale codes (KT_MXFP4_SCALE_CODES). lut holds this matrix's
+@@ -479,10 +502,12 @@
+     std::unique_ptr<uint8_t[]> code2_store;
+     uint8_t* code2 = nullptr;
+     size_t code2_row = 0;
++    alignas(16) float lut2[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+     mutable std::atomic<int> code_checked{0};
+ 
+     // KT_MXFP4_SCALE_CODES_VERIFY: once per matrix, at first use.
+     void verify_scale_codes() const {
++      if (d == nullptr) return;
+       int z = 0;
+       if (!code_checked.compare_exchange_strong(z, 1)) return;
+       const size_t cnt = (size_t)n * k_group_count;
+@@ -518,8 +543,43 @@
+     // than 256 distinct scale bit patterns.
+     bool build_scale_codes() {
+       code = nullptr;
+-      if (d == nullptr || n <= 0 || k_group_count <= 0) return false;
++      code2 = nullptr;
++      if (n <= 0 || k_group_count <= 0) return false;
+       const size_t cnt = (size_t)n * k_group_count;
++      static const bool two_bit = [] { const char* e = std::getenv("KT_MXFP4_SCALE_CODES2"); return e && e[0] == '1'; }();
++      if (d_u8 != nullptr) {
++        // Zero-copy 1-byte E8M0 scale arena: code points directly to d_u8 (0 bytes code_store!).
++        for (int e = 0; e < 256; e++) {
++          uint32_t x = (uint32_t)e << 23;
++          std::memcpy(&lut[e], &x, 4);
++        }
++        code = d_u8;
++        if (two_bit) {
++          int16_t map[256];
++          for (int i = 0; i < 256; i++) map[i] = -1;
++          int nd = 0;
++          for (size_t i = 0; i < cnt; i++) {
++            uint8_t v = d_u8[i];
++            if (map[v] < 0) {
++              if (nd == 4) { nd = 5; break; }
++              map[v] = (int16_t)nd;
++              lut2[nd] = lut[v];
++              nd++;
++            }
++          }
++          if (nd <= 4) {
++            for (int i = nd; i < 4; i++) lut2[i] = 0.0f;
++            code2_row = ((size_t)k_group_count + 3) / 4;
++            code2_store.reset(new uint8_t[(size_t)n * code2_row + 8]());
++            for (int r = 0; r < n; r++)
++              for (int g = 0; g < k_group_count; g++)
++                code2_store[(size_t)r * code2_row + (g >> 2)] |= (uint8_t)(map[d_u8[(size_t)r * k_group_count + g]] << ((g & 3) * 2));
++            code2 = code2_store.get();
++          }
++        }
++        return true;
++      }
++      if (d == nullptr) return false;
+       std::unique_ptr<uint8_t[]> out(new uint8_t[cnt]);
+       uint32_t keys[512];
+       int16_t val[512];
+@@ -540,9 +600,8 @@
+         out[i] = (uint8_t)val[h];
+       }
+       for (int i = nd; i < 256; i++) lut[i] = 0.0f;
+-      code2 = nullptr;
+-      static const bool two_bit = [] { const char* e = std::getenv("KT_MXFP4_SCALE_CODES2"); return e && e[0] == '1'; }();
+       if (two_bit && nd <= 4) {
++        for (int i = 0; i < 4; i++) lut2[i] = lut[i];
+         code2_row = ((size_t)k_group_count + 3) / 4;
+         code2_store.reset(new uint8_t[(size_t)n * code2_row + 8]());
+         for (int r = 0; r < n; r++)
+@@ -796,7 +855,7 @@
+       const char* v = std::getenv("KT_MXFP4_SMALL_M");
+       return v ? std::atoi(v) != 0 : true;
+     }();
+-    if (kSmallM && m >= 2 && m <= 8 && n_end > n_start) {
++    if (((kSmallM && m >= 2 && m <= 8) || (b.d == nullptr && b.code != nullptr && m >= 2)) && n_end > n_start) {
+       const int ncols = n_end - n_start;
+       constexpr int kSmBlk = 32;  // groups a k block: four rows' activations are 16 KiB
+       static thread_local std::vector<float> sm_park_storage;
+@@ -1329,7 +1388,7 @@
+         if (b.code2 != nullptr) {
+           // Same loop; the scale's index is two bits of a byte that holds four groups.
+           const uint8_t* b_c2 = b.code2 + (size_t)ni * b.code2_row;
+-          const float* lut = b.lut;
++          const float* lut = b.lut2;
+           for (int g = 0; g < group_count; g++) {
+             const float* ap = ap_row + g * 32;
+             if (dec_pfs > 0 && (g & 3) == 0) _mm_prefetch((const char*)b_row + (size_t)g * 16 + dec_pfs, _MM_HINT_T0);
+@@ -1626,7 +1685,7 @@
+           g3 = _mm256_fmadd_ps(load_bf16_to_fp32(a3 + k_base + ki), wv, g3);
+         }
+ 
+-        __m256 sv = _mm256_broadcast_ss(&b_scales[g]);
++        __m256 sv = _mm256_broadcast_ss(b.code ? &b.lut[b.code[(size_t)ni * group_count + g]] : &b_scales[g]);
+         tot0 = _mm256_fmadd_ps(g0, sv, tot0);
+         tot1 = _mm256_fmadd_ps(g1, sv, tot1);
+         tot2 = _mm256_fmadd_ps(g2, sv, tot2);
+@@ -1645,7 +1704,7 @@
+       float scalar_tail = 0.0f;
+ 
+       for (int g = 0; g < group_count; g++) {
+-        const float scale = b_scales[g];
++        const float scale = b.code ? b.lut[b.code[(size_t)ni * group_count + g]] : b_scales[g];
+         const int k_base = g * group_size;
+         __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+         __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();
+@@ -1964,9 +2023,15 @@
+               return;
+             size_t scale_elem_count = ((size_t)config_.hidden_size * config_.intermediate_size) / group_size;
+             // tp_part_idx == 0 guaranteed here, so offset is 0
+-            convert_or_copy(gate_bb_[expert_idx]->d, (const ggml_bf16_t*)config_.gate_scales[0][lid], scale_elem_count);
+-            convert_or_copy(up_bb_[expert_idx]->d, (const ggml_bf16_t*)config_.up_scales[0][lid], scale_elem_count);
+-            convert_or_copy(down_bb_[expert_idx]->d, (const ggml_bf16_t*)config_.down_scales[0][lid], scale_elem_count);
++            if (gate_bb_[expert_idx]->d_u8 != nullptr) {
++              bf16_to_e8m0(gate_bb_[expert_idx]->d_u8, (const ggml_bf16_t*)config_.gate_scales[0][lid], scale_elem_count);
++              bf16_to_e8m0(up_bb_[expert_idx]->d_u8, (const ggml_bf16_t*)config_.up_scales[0][lid], scale_elem_count);
++              bf16_to_e8m0(down_bb_[expert_idx]->d_u8, (const ggml_bf16_t*)config_.down_scales[0][lid], scale_elem_count);
++            } else {
++              convert_or_copy(gate_bb_[expert_idx]->d, (const ggml_bf16_t*)config_.gate_scales[0][lid], scale_elem_count);
++              convert_or_copy(up_bb_[expert_idx]->d, (const ggml_bf16_t*)config_.up_scales[0][lid], scale_elem_count);
++              convert_or_copy(down_bb_[expert_idx]->d, (const ggml_bf16_t*)config_.down_scales[0][lid], scale_elem_count);
++            }
+           },
+           nullptr);
+     } else {
+@@ -2005,12 +2070,21 @@
+             if (config_.should_skip_expert(expert_idx)) return;
+             uint64_t lid = expert_map(physical_to_logical_map, expert_idx);
+             size_t scale_elem_count = ((size_t)config_.hidden_size * config_.intermediate_size) / group_size;
+-            convert_or_copy(gate_bb_[expert_idx]->d, (ggml_bf16_t*)config_.gate_scale + lid * scale_elem_count,
+-                            scale_elem_count);
+-            convert_or_copy(up_bb_[expert_idx]->d, (ggml_bf16_t*)config_.up_scale + lid * scale_elem_count,
+-                            scale_elem_count);
+-            convert_or_copy(down_bb_[expert_idx]->d, (ggml_bf16_t*)config_.down_scale + lid * scale_elem_count,
+-                            scale_elem_count);
++            if (gate_bb_[expert_idx]->d_u8 != nullptr) {
++              bf16_to_e8m0(gate_bb_[expert_idx]->d_u8, (ggml_bf16_t*)config_.gate_scale + lid * scale_elem_count,
++                           scale_elem_count);
++              bf16_to_e8m0(up_bb_[expert_idx]->d_u8, (ggml_bf16_t*)config_.up_scale + lid * scale_elem_count,
++                           scale_elem_count);
++              bf16_to_e8m0(down_bb_[expert_idx]->d_u8, (ggml_bf16_t*)config_.down_scale + lid * scale_elem_count,
++                           scale_elem_count);
++            } else {
++              convert_or_copy(gate_bb_[expert_idx]->d, (ggml_bf16_t*)config_.gate_scale + lid * scale_elem_count,
++                              scale_elem_count);
++              convert_or_copy(up_bb_[expert_idx]->d, (ggml_bf16_t*)config_.up_scale + lid * scale_elem_count,
++                              scale_elem_count);
++              convert_or_copy(down_bb_[expert_idx]->d, (ggml_bf16_t*)config_.down_scale + lid * scale_elem_count,
++                              scale_elem_count);
++            }
+           },
+           nullptr);
+     }
+@@ -2019,6 +2093,11 @@
+   static inline void fp32_to_bf16(ggml_bf16_t* dst, const float* src, size_t count) {
+     convert_or_copy(dst, src, count);
+   }
++  template <typename BB>
++  static inline void export_scales_bf16(ggml_bf16_t* dst, const BB* bb, size_t off, size_t count) {
++    if (bb->d_u8 != nullptr) e8m0_to_bf16(dst, bb->d_u8 + off, count);
++    else fp32_to_bf16(dst, bb->d + off, count);
++  }
+ 
+   void write_weights_to_buffer(int gpu_tp_count, int cpu_tp_count, int expert_id, const GeneralMOEConfig& full_config,
+                                const std::vector<uintptr_t>& w13_weight_ptrs,
+@@ -2078,12 +2157,12 @@
+               size_t gwo = (size_t)local_idx * wpc, gso = (size_t)local_idx * spc;
+               for (size_t col = cs; col < ce; col++) {
+                 std::memcpy(w2_wdst + col * gws + gwo, down_bb_[expert_id]->b + col * wpc, wpc);
+-                fp32_to_bf16(w2_sdst + col * gss + gso, down_bb_[expert_id]->d + col * spc, spc);
++                export_scales_bf16(w2_sdst + col * gss + gso, down_bb_[expert_id].get(), col * spc, spc);
+               }
+             } else if (tid == NWT * 2 + ndt) {
+-              fp32_to_bf16(w13_sdst + s_off + gate_s_half, gate_bb_[expert_id]->d, cpu_tp_scale_elem_count);
++              export_scales_bf16(w13_sdst + s_off + gate_s_half, gate_bb_[expert_id].get(), 0, cpu_tp_scale_elem_count);
+             } else {
+-              fp32_to_bf16(w13_sdst + s_off + up_s_half, up_bb_[expert_id]->d, cpu_tp_scale_elem_count);
++              export_scales_bf16(w13_sdst + s_off + up_s_half, up_bb_[expert_id].get(), 0, cpu_tp_scale_elem_count);
+             }
+           },
+           nullptr);
+@@ -2124,12 +2203,12 @@
+                 size_t cwoff = col * config_.intermediate_size / 2 + lg * dw / config_.hidden_size;
+                 size_t csoff = col * (config_.intermediate_size / group_size) + lg * ds / config_.hidden_size;
+                 std::memcpy(w2_wdst + col * wgc, down_bb_[expert_id]->b + cwoff, wgc);
+-                fp32_to_bf16(w2_sdst + col * sgc, down_bb_[expert_id]->d + csoff, sgc);
++                export_scales_bf16(w2_sdst + col * sgc, down_bb_[expert_id].get(), csoff, sgc);
+               }
+             } else if (tt == NWT * 2 + ndt) {
+-              fp32_to_bf16(w13_sdst + gate_s_half, gate_bb_[expert_id]->d + cos, ds);
++              export_scales_bf16(w13_sdst + gate_s_half, gate_bb_[expert_id].get(), cos, ds);
+             } else {
+-              fp32_to_bf16(w13_sdst + up_s_half, up_bb_[expert_id]->d + cos, ds);
++              export_scales_bf16(w13_sdst + up_s_half, up_bb_[expert_id].get(), cos, ds);
+             }
+           },
+           nullptr);
+@@ -2290,10 +2369,17 @@
+               if (config.gate_scales[0][lid] == nullptr || config.up_scales[0][lid] == nullptr) {
+                 throw std::runtime_error("TP_MOE load_weights: null scale pointer for expert " + std::to_string(lid));
+               }
+-              convert_or_copy(tp->gate_bb_[eid]->d, (const ggml_bf16_t*)config.gate_scales[0][lid] + scale_off,
+-                              scale_count);
+-              convert_or_copy(tp->up_bb_[eid]->d, (const ggml_bf16_t*)config.up_scales[0][lid] + scale_off,
+-                              scale_count);
++              if (tp->gate_bb_[eid]->d_u8 != nullptr) {
++                bf16_to_e8m0(tp->gate_bb_[eid]->d_u8, (const ggml_bf16_t*)config.gate_scales[0][lid] + scale_off,
++                             scale_count);
++                bf16_to_e8m0(tp->up_bb_[eid]->d_u8, (const ggml_bf16_t*)config.up_scales[0][lid] + scale_off,
++                             scale_count);
++              } else {
++                convert_or_copy(tp->gate_bb_[eid]->d, (const ggml_bf16_t*)config.gate_scales[0][lid] + scale_off,
++                                scale_count);
++                convert_or_copy(tp->up_bb_[eid]->d, (const ggml_bf16_t*)config.up_scales[0][lid] + scale_off,
++                                scale_count);
++              }
+ 
+               // down weights: K-split, non-contiguous → per-row memcpy into repack buf
+               uint8_t* src_down = (uint8_t*)config.down_projs[0][lid];
+@@ -2313,10 +2399,18 @@
+               int full_interm_groups = full_interm / group_size;
+               int per_tp_groups = per_tp_interm / group_size;
+               const ggml_bf16_t* src_ds = (const ggml_bf16_t*)config.down_scales[0][lid];
+-              float* dst_ds = tp->down_bb_[eid]->d;
+-              for (int row = 0; row < tpc.hidden_size; row++) {
+-                convert_or_copy(dst_ds + (size_t)row * per_tp_groups,
+-                                src_ds + (size_t)row * full_interm_groups + (size_t)i * per_tp_groups, per_tp_groups);
++              if (tp->down_bb_[eid]->d_u8 != nullptr) {
++                uint8_t* dst_ds = tp->down_bb_[eid]->d_u8;
++                for (int row = 0; row < tpc.hidden_size; row++) {
++                  bf16_to_e8m0(dst_ds + (size_t)row * per_tp_groups,
++                               src_ds + (size_t)row * full_interm_groups + (size_t)i * per_tp_groups, per_tp_groups);
++                }
++              } else {
++                float* dst_ds = tp->down_bb_[eid]->d;
++                for (int row = 0; row < tpc.hidden_size; row++) {
++                  convert_or_copy(dst_ds + (size_t)row * per_tp_groups,
++                                  src_ds + (size_t)row * full_interm_groups + (size_t)i * per_tp_groups, per_tp_groups);
++                }
+               }
+             },
+             nullptr);
+@@ -2400,7 +2494,7 @@
+       });
+     }
+ 
+-    if (kt_mxfp4_scale_codes()) {
++    if (kt_mxfp4_scale_codes() || kt_mxfp4_scale_arena_e8m0()) {
+       std::atomic<size_t> built{0}, total{0};
+       pool->dispense_backend()->do_numa_job([&, this](int i) {
+         auto* tp = tps[i].get();

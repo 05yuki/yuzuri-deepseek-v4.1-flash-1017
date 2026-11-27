@@ -8,7 +8,7 @@ The rest of the GPU memory is working room, and each use of it shrinks when ther
 ## RAM
 
 - A 512 GB class machine.
-- The server uses about 420 GiB.
+- The server uses about 350 GiB (with 1-byte E8M0 scale arenas and 2/4-bit packed scale DMA; about 420 GiB with older prebuilt kt-kernel wheels).
 - Most of it is the MXFP4 CPU experts on 2 MB pages.
 - The prefix cache's copy in host memory adds about 5 GiB a GPU.
 - Yuzuri makes one expert pool per NUMA node and uses every physical core.
@@ -20,7 +20,7 @@ The rest of the GPU memory is working room, and each use of it shrinks when ther
 - The launch is `numactl -N 0 -m 0 env CUDA_VISIBLE_DEVICES=0 MODEL=<checkpoint dir> ./serve.sh`.
 - Yuzuri then keeps as many experts in an expert cache as the node's free memory holds.
 - The other experts are read from the checkpoint on the drive when the routing picks them.
-- Decode is 22.0 tok/s and a 35,000-token prefill 42.3 s there, against 40.6 tok/s and 27.2 s with both sockets ([README](../README.md#results)).
+- Decode is 23.0 tok/s and a 35,000-token prefill 35.4 s there, against 40.6 tok/s and 18.4 s with both sockets ([README](../README.md#results)).
 - A machine with one socket and 256 GB has not been run with this repository.
 
 ## GPU

@@ -66,7 +66,7 @@ Thinking is off unless a request sets `"chat_template_kwargs": {"thinking": true
 - An NVIDIA GPU of 16 GB, SM120 (RTX 50).
   SM89 (RTX 40) is selected by `03-sm89-attention` but has not been run with this repository.
 - 512 GB of RAM.
-  The server uses about 420 GiB.
+  The server uses about 350 GiB (with 1-byte E8M0 scale arenas and 2/4-bit packed scale DMA; about 420 GiB with older prebuilt kt-kernel wheels).
   With 256 GB the experts that do not fit are read from the drive ([docs/requirements.md](docs/requirements.md#with-256-gb)).
 - An x86-64 CPU with AVX2.
 - The checkpoint (476 GiB) on an NVMe drive.
@@ -90,13 +90,13 @@ One request at a time.
 
 | | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| decode, Japanese prose, median of four prompts | 58.4 tok/s | 40.9 tok/s | 23.0 tok/s |
-| prefill, 35,000 tokens | 11.5 s (3,032 tok/s) | 19.9 s (1,757 tok/s) | 35.4 s (989 tok/s) |
+| decode, Japanese prose, median of four prompts | 57.5 tok/s | 40.6 tok/s | 23.0 tok/s |
+| prefill, 35,000 tokens | 11.4 s (3,069 tok/s) | 18.4 s (1,903 tok/s) | 35.4 s (989 tok/s) |
 | the same prompt again, from the prefix cache | 2.0 s | 2.1 s | 6.3 s |
-| server up after | 196 s | 206 s | 195 s |
-| hot expert slots at the first lend | 889 | 217 | 217 |
-| NLL, served | 0.7179 | 0.7205 | 0.7160 |
-| NLL, served minus reference | -0.0007 (SE 0.0030) | +0.0019 (SE 0.0038) | -0.0025 (SE 0.0039) |
+| server up after | 201 s | 210 s | 195 s |
+| hot expert slots at the first lend | 893 | 223 | 217 |
+| NLL, served | 0.7163 | 0.7192 | 0.7160 |
+| NLL, served minus reference | -0.0022 (SE 0.0045) | +0.0006 (SE 0.0045) | -0.0025 (SE 0.0039) |
 
 - The three reports are in [reports/](reports/).
 - The server-up times are of launches after the first.
@@ -114,12 +114,12 @@ Decode by kind of text:
 
 | text | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| Chinese prose | 51.7 tok/s | 35.6 tok/s | 19.7 tok/s |
-| English prose | 46.3 tok/s | 34.8 tok/s | 17.7 tok/s |
-| English technical prose | 41.7 tok/s | 32.9 tok/s | 15.9 tok/s |
-| math | 46.2 tok/s | 34.5 tok/s | 18.1 tok/s |
-| JSON | 44.3 tok/s | 33.4 tok/s | 17.2 tok/s |
-| Python code | 41.5 tok/s | 32.5 tok/s | 15.2 tok/s |
+| Chinese prose | 52.2 tok/s | 35.2 tok/s | 19.7 tok/s |
+| English prose | 47.0 tok/s | 34.8 tok/s | 17.7 tok/s |
+| English technical prose | 40.9 tok/s | 33.3 tok/s | 15.9 tok/s |
+| math | 47.1 tok/s | 35.2 tok/s | 18.1 tok/s |
+| JSON | 44.3 tok/s | 34.0 tok/s | 17.2 tok/s |
+| Python code | 41.5 tok/s | 32.8 tok/s | 15.2 tok/s |
 
 - The hot experts on the GPU are swapped for the ones the text being written routes to most.
 - Code, JSON, math and English spread their routes over more experts than Japanese prose, so the CPU computes more of them.
@@ -131,10 +131,10 @@ No prompt shares a prefix with the one before it.
 
 | prompt | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| 65,536 tokens | 16.3 s (4,029 tok/s) | 38.5 s (1,704 tok/s) | 69.4 s (945 tok/s) |
-| 131,072 tokens | 32.9 s (3,982 tok/s) | 76.0 s (1,726 tok/s) | 137.4 s (954 tok/s) |
-| 524,288 tokens | 134.1 s (3,909 tok/s) | 268.1 s (1,956 tok/s) | 515.1 s (1,018 tok/s) |
-| 1,000,000 tokens | 276.2 s (3,621 tok/s) | 527.6 s (1,895 tok/s) | 1,022.0 s (978 tok/s) |
+| 65,536 tokens | 18.8 s (3,492 tok/s) | 30.6 s (2,142 tok/s) | 69.4 s (945 tok/s) |
+| 131,072 tokens | 34.1 s (3,840 tok/s) | 57.3 s (2,287 tok/s) | 137.4 s (954 tok/s) |
+| 524,288 tokens | 138.3 s (3,790 tok/s) | 239.3 s (2,191 tok/s) | 515.1 s (1,018 tok/s) |
+| 1,000,000 tokens | 292.9 s (3,414 tok/s) | 497.0 s (2,012 tok/s) | 1,022.0 s (978 tok/s) |
 
 ### Prefill and the drive
 
@@ -145,9 +145,9 @@ The NVMe drive's random read rate limits the prefill.
 - A prompt of random token ids misses that cache on every row.
 - One such prompt of 35,000 tokens takes about 1.86 million reads.
 - Prefill reads are offset-sorted, deduplicated and issued at high queue depth while the next chunk warms in the background, so subsequent chunks hit the cache at ~98.7%.
-- A 35,000-token prompt that needs no reads from the drive (one token repeated) prefills in 10.7 s on two GPUs and 19.3 s on one.
-- The drive therefore adds about 0.8 s to the two-GPU prefill above, and 0.6 s on one GPU.
-- 10.7 s and 19.3 s are what a faster drive can approach; no other drive has been measured.
+- A 35,000-token prompt that needs no reads from the drive (one token repeated) prefills in 8.9 s on two GPUs and 17.7 s on one.
+- The drive therefore adds about 2.5 s to the two-GPU prefill above, and 0.7 s on one GPU.
+- 8.9 s and 17.7 s are what a faster drive can approach; no other drive has been measured.
 
 The state of the drive matters as well.
 

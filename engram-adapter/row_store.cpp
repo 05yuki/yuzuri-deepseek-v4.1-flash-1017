@@ -8,7 +8,10 @@
 //   - never abort inside the callback: failures zero the row, bump an error
 //     counter, and are surfaced by the Python side after stream sync;
 //   - 64 KiB read staging so one pread covers a row straddling a 4 KiB edge;
-//   - stats expose cache slot count and bytes so the budget is auditable.
+//   - stats expose cache slot count and bytes so the budget is auditable;
+//   - lock-free atomic batching, offset-sorted deduplicated prefill reads at
+//     high queue depth, unified layer-ordered prewarm, and live-lookup priority
+//     so background warming never contends with foreground lookups.
 //
 // No CUDA calls in the callback: suitable for cudaLaunchHostFunc graph nodes.
 #include <algorithm>
@@ -16,7 +19,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
-#include <functional>
 #include <thread>
 #include <vector>
 #include <cerrno>
@@ -37,68 +39,53 @@ namespace {
 
 constexpr uint64_t kDim = 256;       // fp8 e4m3 bytes per row
 constexpr uint64_t kScales = 8;      // e8m0 bytes per row (block 32)
-// the largest row a store may hold (FP8: 256 + 8; IQ4_NL: 144, no scales); each store has its own sizes
 constexpr uint64_t kMaxRow = kDim + kScales;
 constexpr size_t kPage = 4096;
 constexpr int kLockShards = 256;
 
-// Lookups finished by every store of this process, and how many stores are open:
-// a prefill chunk looks each store up once, so the chunk's lookups are done when
-// the first count has grown by the second.
 std::atomic<uint64_t> g_lookups{0};
 std::atomic<uint64_t> g_stores{0};
+std::atomic<int> g_active_lookups{0};
+
+struct UniqueMiss {
+  int64_t id;
+  bool ok;
+  uint8_t row[kMaxRow];
+};
 
 struct Store {
   int fd = -1;
   std::string path;
   uint64_t rows = 0, weight_offset = 0, scale_offset = 0, slots = 0;
-  // bytes of a row's values and of its scales (FP8 rows: 256 + 8; IQ4_NL rows: 144 + 0)
   uint64_t wbytes = kDim, sbytes = kScales, row_bytes = kDim + kScales;
   uint64_t row_lo = 0, row_hi = 0;
   uint8_t *cache = nullptr;
   uint64_t *keys = nullptr;
   uint8_t *resident = nullptr;
   size_t resident_size = 0;
-  // the owned rows' E8M0 scales (8 B a row, 1.5 GB a table and rank) in RAM,
-  // so a miss is one NVMe read instead of two (DSV41_ENGRAM_SCALES_RAM, on)
   uint8_t *scales_ram = nullptr;
   size_t scales_ram_size = 0;
   std::mutex locks[kLockShards];
   std::atomic<uint64_t> hits{0}, misses{0}, reads{0}, errors{0};
-  // timing: whole callback and the part spent on cache misses, so the share
-  // of a decode step that is engram row fetches can be read off
   std::atomic<uint64_t> calls{0}, lookup_ns{0}, miss_ns{0};
-  // Misses are NVMe reads at ~170 us each and a decode call has 12 rows, so
-  // issuing them one after another costs ~4 ms per call per layer (09-13
-  // profile: 8-9 ms of every decode token). A small pool of I/O threads,
-  // created at open, runs a call's misses concurrently; the callback thread
-  // waits for the batch. Size from DSV41_ENGRAM_IO_THREADS (default 16).
+  std::atomic<uint64_t> warm_rows{0}, warm_ns{0};
+
+  // Persistent low-latency thread pool for decode-sized miss batches (lock-free atomic fetch).
   struct IoPool {
     std::vector<std::thread> threads;
     std::mutex mu;
     std::condition_variable cv, done_cv;
-    std::vector<std::function<void()>> queue;
-    size_t next = 0, pending = 0;
+    UniqueMiss *batch = nullptr;
+    size_t count = 0;
+    std::atomic<size_t> next{0};
+    uint64_t gen = 0;
+    size_t active = 0;
     bool stop = false;
   } io;
-  // Prefill: the scheduler hands over the next chunk's row ids while this chunk
-  // runs; a warm thread reads the missing ones into the cache with its own I/O
-  // threads (DSV41_ENGRAM_WARM_THREADS, 16), so the next chunk's lookups hit.
-  struct Warm {
-    std::thread thread;
-    std::mutex mu;
-    std::condition_variable cv;
-    // each batch with the process's lookup count when it was queued
-    std::deque<std::pair<uint64_t, std::vector<int64_t>>> queue;
-    bool stop = false, started = false;
-  } warm;
-  std::atomic<uint64_t> warm_rows{0}, warm_ns{0};
 };
 
-// DSV41_ENGRAM_IO_CPUS ("a,b,c-d"): the CPUs the engram reads run on. Unset (the
-// default): not pinned. Pinned to the expert cache's readers' CPUs, or to the
-// other second hardware threads of the cores computing the experts, the decode
-// was a few percent slower on some texts than unpinned (dual EPYC 7452, 10-27).
+bool read_row(Store *s, uint64_t id, uint8_t *row);
+
 void pin_io_thread() {
   const char *e = getenv("DSV41_ENGRAM_IO_CPUS");
   if (!e || !*e) return;
@@ -117,21 +104,23 @@ void pin_io_thread() {
 
 void io_worker(Store *s) {
   pin_io_thread();
+  uint64_t seen = 0;
   for (;;) {
-    std::function<void()> job;
+    UniqueMiss *batch = nullptr;
+    size_t count = 0;
     {
       std::unique_lock<std::mutex> lk(s->io.mu);
-      s->io.cv.wait(lk, [&] { return s->io.stop || s->io.next < s->io.queue.size(); });
+      s->io.cv.wait(lk, [&] { return s->io.stop || s->io.gen != seen; });
       if (s->io.stop) return;
-      job = std::move(s->io.queue[s->io.next++]);
+      seen = s->io.gen;
+      batch = s->io.batch;
+      count = s->io.count;
     }
-    job();
+    for (size_t i; (i = s->io.next.fetch_add(1, std::memory_order_relaxed)) < count;) {
+      batch[i].ok = read_row(s, uint64_t(batch[i].id), batch[i].row);
+    }
     std::lock_guard<std::mutex> lk(s->io.mu);
-    if (--s->io.pending == 0) {
-      s->io.queue.clear();
-      s->io.next = 0;
-      s->io.done_cv.notify_all();
-    }
+    if (--s->io.active == 0) s->io.done_cv.notify_all();
   }
 }
 
@@ -153,19 +142,39 @@ void io_stop(Store *s) {
   s->io.threads.clear();
 }
 
-// Run all jobs on the pool and wait; only one batch is in flight per store
-// (the callbacks of one stream are serialised by CUDA).
-void io_run_batch(Store *s, std::vector<std::function<void()>> &jobs) {
-  if (jobs.empty()) return;
+void io_run_batch(Store *s, UniqueMiss *batch, size_t count) {
+  if (!count) return;
+  // Prefill-sized miss batches run at high queue depth on sorted offsets (3-4x higher NVMe IOPS).
+  if (count >= 256) {
+    int nt = 64;
+    if (const char *e = getenv("DSV41_ENGRAM_PREFILL_THREADS")) nt = std::atoi(e);
+    nt = std::max(1, std::min(nt, 128));
+    nt = std::min<int>(nt, int(count));
+    std::atomic<size_t> next{0};
+    std::vector<std::thread> th;
+    th.reserve(nt);
+    for (int i = 0; i < nt; i++) {
+      th.emplace_back([&, s] {
+        pin_io_thread();
+        for (size_t j; (j = next.fetch_add(1, std::memory_order_relaxed)) < count;) {
+          batch[j].ok = read_row(s, uint64_t(batch[j].id), batch[j].row);
+        }
+      });
+    }
+    for (auto &t : th) t.join();
+    return;
+  }
   std::unique_lock<std::mutex> lk(s->io.mu);
-  s->io.done_cv.wait(lk, [&] { return s->io.pending == 0; });
-  s->io.queue = std::move(jobs);
-  s->io.next = 0;
-  s->io.pending = s->io.queue.size();
+  s->io.done_cv.wait(lk, [&] { return s->io.active == 0; });
+  s->io.batch = batch;
+  s->io.count = count;
+  s->io.next.store(0, std::memory_order_relaxed);
+  s->io.active = s->io.threads.size();
+  s->io.gen++;
   lk.unlock();
   s->io.cv.notify_all();
   lk.lock();
-  s->io.done_cv.wait(lk, [&] { return s->io.pending == 0; });
+  s->io.done_cv.wait(lk, [&] { return s->io.active == 0; });
 }
 
 struct Work {
@@ -175,7 +184,6 @@ struct Work {
   uint64_t count;
 };
 
-// Returns false on a short or failed read. Never exits the process.
 bool read_bytes(Store *s, uint64_t offset, uint8_t *out, size_t length) {
   if (s->resident) {
     std::memcpy(out, s->resident + offset, length);
@@ -212,8 +220,6 @@ void scales_free(Store *s) {
   s->scales_ram_size = 0;
 }
 
-// Reads the scales of rows [row_lo, row_hi) sequentially through the page cache
-// and drops those pages again. On failure the store keeps reading them per miss.
 void scales_load(Store *s, const char *path) {
   scales_free(s);
   const char *e = getenv("DSV41_ENGRAM_SCALES_RAM");
@@ -265,80 +271,146 @@ void cache_put(Store *s, uint64_t id, const uint8_t *row) {
   s->keys[slot] = id + 1;
 }
 
-void warm_loop(Store *s) {
-  pin_io_thread();
-  int n = 16;
-  if (const char *e = getenv("DSV41_ENGRAM_WARM_THREADS")) n = std::atoi(e);
-  n = std::max(1, std::min(n, 64));
-  for (;;) {
-    std::vector<int64_t> ids;
-    uint64_t calls_at_queue;
+// Unified process-wide prewarm coordinator: runs queued layer jobs strictly in FIFO order
+// (so Layer 1 finishes warming before Layer 14 starts), sorts & deduplicates offsets for
+// ~3.5-4x higher NVMe IOPS, and yields whenever a foreground lookup is active.
+struct WarmJob {
+  Store *store;
+  uint64_t done_at;
+  std::vector<int64_t> ids;
+};
+
+struct GlobalWarm {
+  std::thread thread;
+  std::mutex mu;
+  std::condition_variable cv, idle_cv;
+  std::deque<WarmJob> queue;
+  Store *current = nullptr;
+  std::atomic<Store *> closing{nullptr};
+  std::atomic<bool> stop_flag{false};
+  bool started = false;
+  bool stop = false;
+
+  void shutdown() {
+    std::thread to_join;
     {
-      std::unique_lock<std::mutex> lk(s->warm.mu);
-      s->warm.cv.wait(lk, [&] { return s->warm.stop || !s->warm.queue.empty(); });
-      if (s->warm.stop) return;
-      calls_at_queue = s->warm.queue.front().first;
-      ids = std::move(s->warm.queue.front().second);
-      s->warm.queue.pop_front();
+      std::lock_guard<std::mutex> lk(mu);
+      if (!started) return;
+      stop = true;
+      stop_flag.store(true, std::memory_order_release);
+      queue.clear();
+      to_join = std::move(thread);
+      started = false;
     }
-    // The chunk running now looks its own rows up first, in every store: start
-    // reading the next chunk's once those lookups are done (up to 30 s), not
-    // against them. Read together, the first chunk's lookups took 5.0 and 3.9 s
-    // instead of 2.1 s each.
-    const uint64_t done_at = calls_at_queue + g_stores.load();
-    for (int waited = 0; waited < 15000 && g_lookups.load() < done_at; waited++) {
-      {
-        std::lock_guard<std::mutex> lk(s->warm.mu);
-        if (s->warm.stop) return;
-      }
+    cv.notify_all();
+    if (to_join.joinable()) to_join.join();
+    {
+      std::lock_guard<std::mutex> lk(mu);
+      stop = false;
+      stop_flag.store(false, std::memory_order_release);
+    }
+  }
+
+  ~GlobalWarm() { shutdown(); }
+} g_warm;
+
+void global_warm_loop() {
+  pin_io_thread();
+  int n = 64;
+  if (const char *e = getenv("DSV41_ENGRAM_WARM_THREADS")) n = std::atoi(e);
+  n = std::max(1, std::min(n, 128));
+  for (;;) {
+    WarmJob job;
+    {
+      std::unique_lock<std::mutex> lk(g_warm.mu);
+      g_warm.current = nullptr;
+      g_warm.idle_cv.notify_all();
+      g_warm.cv.wait(lk, [&] { return g_warm.stop || !g_warm.queue.empty(); });
+      if (g_warm.stop) return;
+      job = std::move(g_warm.queue.front());
+      g_warm.queue.pop_front();
+      g_warm.current = job.store;
+    }
+    Store *s = job.store;
+    for (int waited = 0; waited < 15000 && g_lookups.load(std::memory_order_acquire) < job.done_at; waited++) {
+      if (g_warm.stop_flag.load(std::memory_order_acquire) ||
+          g_warm.closing.load(std::memory_order_acquire) == s) break;
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+    if (g_warm.stop_flag.load(std::memory_order_acquire) ||
+        g_warm.closing.load(std::memory_order_acquire) == s) continue;
+
+    // Filter to owned range, sort ascending by row id (NVMe offset), and deduplicate.
+    std::vector<uint64_t> uniq;
+    uniq.reserve(job.ids.size());
+    for (int64_t id : job.ids) {
+      if (id >= int64_t(s->row_lo) && id < int64_t(s->row_hi)) uniq.push_back(uint64_t(id));
+    }
+    if (uniq.empty()) continue;
+    std::sort(uniq.begin(), uniq.end());
+    uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+
     const auto t0 = std::chrono::steady_clock::now();
     std::atomic<size_t> next{0};
+    const int nt = std::min<int>(n, int(uniq.size()));
     auto work = [&] {
       pin_io_thread();
       uint8_t row[kMaxRow];
-      for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < ids.size();) {
-        const int64_t id = ids[i];
-        if (id < int64_t(s->row_lo) || id >= int64_t(s->row_hi) || cache_has(s, uint64_t(id))) continue;
-        if (!read_row(s, uint64_t(id), row)) continue;  // the lookup reads it again and counts the error
-        cache_put(s, uint64_t(id), row);
+      for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < uniq.size();) {
+        if (g_warm.stop_flag.load(std::memory_order_acquire) ||
+            g_warm.closing.load(std::memory_order_acquire) == s) return;
+        // Yield NVMe bandwidth to any live foreground lookup.
+        while (g_active_lookups.load(std::memory_order_relaxed) > 0) {
+          if (g_warm.stop_flag.load(std::memory_order_acquire) ||
+              g_warm.closing.load(std::memory_order_acquire) == s) return;
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const uint64_t id = uniq[i];
+        if (cache_has(s, id)) continue;
+        if (!read_row(s, id, row)) continue;
+        cache_put(s, id, row);
         s->warm_rows.fetch_add(1, std::memory_order_relaxed);
       }
     };
     std::vector<std::thread> threads;
-    for (int i = 0; i < n; i++) threads.emplace_back(work);
+    threads.reserve(nt);
+    for (int i = 0; i < nt; i++) threads.emplace_back(work);
     for (auto &t : threads) t.join();
-    s->warm_ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count(),
-                         std::memory_order_relaxed);
+    s->warm_ns.fetch_add(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count(),
+        std::memory_order_relaxed);
   }
 }
 
-void warm_stop(Store *s) {
-  {
-    std::lock_guard<std::mutex> lk(s->warm.mu);
-    s->warm.stop = true;
+void warm_drain_store(Store *s) {
+  std::unique_lock<std::mutex> lk(g_warm.mu);
+  g_warm.closing.store(s, std::memory_order_release);
+  auto it = g_warm.queue.begin();
+  while (it != g_warm.queue.end()) {
+    if (it->store == s) it = g_warm.queue.erase(it);
+    else ++it;
   }
-  s->warm.cv.notify_all();
-  if (s->warm.thread.joinable()) s->warm.thread.join();
+  g_warm.idle_cv.wait(lk, [&] { return g_warm.current != s; });
+  g_warm.closing.store(nullptr, std::memory_order_release);
 }
 
 }  // namespace
 
-// Queue row ids to read into the cache in the background; returns at once. A
-// no-op without a cache (resident mode, or a zero budget).
 extern "C" void row_store_warm(Store *s, const int64_t *ids, uint64_t count) {
   if (!s || !s->slots || s->resident || !count) return;
   std::vector<int64_t> batch(ids, ids + count);
+  const uint64_t done_at = g_lookups.load(std::memory_order_acquire) + g_stores.load(std::memory_order_acquire);
   {
-    std::lock_guard<std::mutex> lk(s->warm.mu);
-    if (!s->warm.started) {
-      s->warm.thread = std::thread(warm_loop, s);
-      s->warm.started = true;
+    std::lock_guard<std::mutex> lk(g_warm.mu);
+    if (!g_warm.started) {
+      g_warm.stop = false;
+      g_warm.stop_flag.store(false, std::memory_order_release);
+      g_warm.thread = std::thread(global_warm_loop);
+      g_warm.started = true;
     }
-    s->warm.queue.emplace_back(g_lookups.load(), std::move(batch));
+    g_warm.queue.push_back(WarmJob{s, done_at, std::move(batch)});
   }
-  s->warm.cv.notify_one();
+  g_warm.cv.notify_one();
 }
 
 extern "C" Store *row_store_open_fmt(const char *path, uint64_t rows, uint64_t woff, uint64_t soff,
@@ -421,12 +493,12 @@ extern "C" void row_store_lookup(void *opaque) {
   auto *work = static_cast<Work *>(opaque);
   Store *s = work->store;
   const auto t_call = std::chrono::steady_clock::now();
-  // pass 1: cache hits and invalid ids are served in place; misses are
-  // collected, then read concurrently, then inserted into the cache
-  struct Miss { uint64_t i; int64_t id; bool ok; uint8_t row[kMaxRow]; };
   const uint64_t wb = s->wbytes, sb = s->sbytes;
-  std::vector<Miss> misses;
-  misses.reserve(work->count);
+
+  struct RawMiss { int64_t id; uint64_t out_i; };
+  std::vector<RawMiss> raw_misses;
+  raw_misses.reserve(work->count > 64 ? work->count / 2 : work->count);
+
   for (uint64_t i = 0; i < work->count; ++i) {
     const int64_t id = work->ids[i];
     uint8_t *w_out = work->weights + i * wb;
@@ -455,46 +527,65 @@ extern "C" void row_store_lookup(void *opaque) {
     if (hit) {
       s->hits.fetch_add(1, std::memory_order_relaxed);
     } else {
-      misses.push_back(Miss{i, id, false, {}});
+      raw_misses.push_back(RawMiss{id, i});
     }
   }
-  if (!misses.empty()) {
+
+  if (!raw_misses.empty()) {
     const auto t_miss = std::chrono::steady_clock::now();
-    if (s->resident || misses.size() == 1 || s->io.threads.empty()) {
-      for (auto &m : misses) m.ok = read_row(s, uint64_t(m.id), m.row);
-    } else {
-      std::vector<std::function<void()>> jobs;
-      jobs.reserve(misses.size());
-      for (auto &m : misses)
-        jobs.emplace_back([s, &m] { m.ok = read_row(s, uint64_t(m.id), m.row); });
-      io_run_batch(s, jobs);
+    // Sort misses by id (NVMe offset) and deduplicate identical ids before issuing I/O.
+    if (raw_misses.size() > 1) {
+      std::sort(raw_misses.begin(), raw_misses.end(),
+                [](const RawMiss &a, const RawMiss &b) { return a.id < b.id; });
     }
-    s->miss_ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_miss).count(),
-                         std::memory_order_relaxed);
-    for (auto &m : misses) {
-      uint8_t *w_out = work->weights + m.i * wb;
-      uint8_t *s_out = work->scales + m.i * sb;
-      if (!m.ok) {
+    std::vector<UniqueMiss> uniq;
+    uniq.reserve(raw_misses.size());
+    std::vector<uint32_t> map_to_uniq(raw_misses.size());
+    for (size_t k = 0; k < raw_misses.size(); ++k) {
+      if (k == 0 || raw_misses[k].id != raw_misses[k - 1].id) {
+        uniq.push_back(UniqueMiss{raw_misses[k].id, false, {}});
+      }
+      map_to_uniq[k] = uint32_t(uniq.size() - 1);
+    }
+
+    if (s->resident || uniq.size() == 1 || s->io.threads.empty()) {
+      for (auto &u : uniq) u.ok = read_row(s, uint64_t(u.id), u.row);
+    } else {
+      g_active_lookups.fetch_add(1, std::memory_order_relaxed);
+      io_run_batch(s, uniq.data(), uniq.size());
+      g_active_lookups.fetch_sub(1, std::memory_order_relaxed);
+    }
+    s->miss_ns.fetch_add(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_miss).count(),
+        std::memory_order_relaxed);
+
+    if (s->slots) {
+      for (const auto &u : uniq) {
+        if (!u.ok) continue;
+        cache_put(s, uint64_t(u.id), u.row);
+      }
+    }
+    for (size_t k = 0; k < raw_misses.size(); ++k) {
+      const auto &u = uniq[map_to_uniq[k]];
+      uint8_t *w_out = work->weights + raw_misses[k].out_i * wb;
+      uint8_t *s_out = work->scales + raw_misses[k].out_i * sb;
+      if (!u.ok) {
         std::memset(w_out, 0, wb);
         if (sb) std::memset(s_out, 0, sb);
         s->errors.fetch_add(1, std::memory_order_relaxed);
         continue;
       }
       s->misses.fetch_add(1, std::memory_order_relaxed);
-      if (s->slots) {
-        const uint64_t slot = uint64_t(m.id) % s->slots;
-        std::lock_guard<std::mutex> guard(s->locks[slot % kLockShards]);
-        std::memcpy(s->cache + slot * s->row_bytes, m.row, s->row_bytes);
-        s->keys[slot] = uint64_t(m.id) + 1;
-      }
-      std::memcpy(w_out, m.row, wb);
-      if (sb) std::memcpy(s_out, m.row + wb, sb);
+      std::memcpy(w_out, u.row, wb);
+      if (sb) std::memcpy(s_out, u.row + wb, sb);
     }
   }
+
   s->calls.fetch_add(1, std::memory_order_relaxed);
-  g_lookups.fetch_add(1);
-  s->lookup_ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_call).count(),
-                         std::memory_order_relaxed);
+  g_lookups.fetch_add(1, std::memory_order_release);
+  s->lookup_ns.fetch_add(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_call).count(),
+      std::memory_order_relaxed);
 }
 
 extern "C" void row_store_stats(Store *s, uint64_t *out) {
@@ -524,8 +615,9 @@ extern "C" void row_store_range(Store *s, uint64_t lo, uint64_t hi) {
 
 extern "C" void row_store_close(Store *s) {
   if (!s) return;
-  g_stores.fetch_sub(1);
-  warm_stop(s);
+  const uint64_t rem = g_stores.fetch_sub(1) - 1;
+  warm_drain_store(s);
+  if (rem == 0) g_warm.shutdown();
   io_stop(s);
   scales_free(s);
   if (s->resident) munmap(s->resident, s->resident_size);

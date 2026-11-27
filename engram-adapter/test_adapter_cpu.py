@@ -24,7 +24,9 @@ for layer, meta in man["layers"].items():
     # rows live in the checkpoint shard named by base_dir (or DSV41_ENGRAM_BASE)
     base = Path(os.environ.get("DSV41_ENGRAM_BASE") or man.get("base_dir") or d)
     path = base / meta["file"]
-    rows, woff, soff = meta["rows"], 0, meta["weight_bytes"]
+    rows = meta["rows"]
+    woff = int(meta.get("weight_offset", 0))
+    soff = int(meta.get("scale_offset", meta["weight_bytes"]))
     st = lib.row_store_open(str(path).encode(), rows, woff, soff, 256 << 20, 0)
     assert st, "open failed"
     lib.row_store_range(st, 0, rows)

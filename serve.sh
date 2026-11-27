@@ -144,6 +144,15 @@ args+=(--host-extra-gb "$extra_gib")
 [[ -n "${YUZURI_WITHOUT:-}" ]] && args+=(--without "$YUZURI_WITHOUT")
 [[ -n "${SGLANG_API_KEY:-}" ]] && args+=(--server-arg="--api-key $SGLANG_API_KEY")
 [[ -n "${SGLANG_EXTRA_ARGS:-}" ]] && args+=(--server-arg="$SGLANG_EXTRA_ARGS")
+# Yuzuri's front.py passes its serve.py arguments (port, host, log-dir, YUZURI_PARK=1, --beside, ...) here
+if [[ -n "${YUZURI_SERVE_ARGS:-}" ]]; then
+  mapfile -d '' -t yuzuri_serve_args < <(
+    "$python" -c 'import shlex, sys
+for a in shlex.split(sys.argv[1]):
+    sys.stdout.buffer.write(a.encode() + b"\0")' "$YUZURI_SERVE_ARGS"
+  )
+  (( ${#yuzuri_serve_args[@]} )) && args+=("${yuzuri_serve_args[@]}")
+fi
 
 mkdir -p "$log_dir"
 if [[ "$mode" == "--foreground" ]]; then

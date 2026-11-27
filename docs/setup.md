@@ -82,7 +82,7 @@ Logs go to `logs/<model>/<timestamp>/`, and `logs/<model>/current` links to the 
 
 The first launch of a setup compiles SGLang's and FlashInfer's kernels and measures the prefill plan.
 Later launches reuse the cache (`.cache/` in the checkout).
-On the test machine the first launch was up after 519 s on two GPUs, and later launches after 213 s.
+On the test machine later launches were up after 198 s on two GPUs ([README](../README.md#results)).
 
 ### Variables
 

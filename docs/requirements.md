@@ -20,7 +20,7 @@ The rest of the GPU memory is working room, and each use of it shrinks when ther
 - The launch is `numactl -N 0 -m 0 env CUDA_VISIBLE_DEVICES=0 MODEL=<checkpoint dir> ./serve.sh`.
 - Yuzuri then keeps as many experts in an expert cache as the node's free memory holds.
 - The other experts are read from the checkpoint on the drive when the routing picks them.
-- Decode is 24.1 tok/s and a 35,000-token prefill 42.2 s there, against 39.2 tok/s and 27.4 s with both sockets ([README](../README.md#results)).
+- Decode is 22.0 tok/s and a 35,000-token prefill 42.3 s there, against 40.6 tok/s and 27.2 s with both sockets ([README](../README.md#results)).
 - A machine with one socket and 256 GB has not been run with this repository.
 
 ## GPU
@@ -65,7 +65,7 @@ The versions the results were measured with:
 | piece | version |
 |---|---|
 | OS | Ubuntu 26.04.1, kernel 7.0.0 |
-| NVIDIA driver | 595.91.07 |
+| NVIDIA driver | 615.71.09 |
 | Python | 3.12.14 |
 | torch | 2.14.1 + cu130 |
 | FlashInfer | 0.7.4 |

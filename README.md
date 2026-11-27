@@ -85,24 +85,23 @@ Three host settings are recommended, set as root.
 
 Measured by `tools/qualify.sh` on 2 x EPYC 7452 (2 x 32 cores), 499 GiB of RAM and RTX 5070 Ti 16 GB cards on PCIe 4.0 x16.
 The checkpoint is on a WD Blue SN5100 2TB.
-The software is Ubuntu 26.04, driver 595.91.07, torch 2.14.1 + cu130, FlashInfer 0.7.4 and CUDA toolkit 13.1.
+The software is Ubuntu 26.04, driver 615.71.09, torch 2.14.1 + cu130, FlashInfer 0.7.4 and CUDA toolkit 13.1.
 One request at a time.
 
 | | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| decode, Japanese prose, median of four prompts | 57.0 tok/s | 39.2 tok/s | 24.1 tok/s |
-| prefill, 35,000 tokens | 20.1 s (1,744 tok/s) | 27.4 s (1,279 tok/s) | 42.2 s (830 tok/s) |
-| the same prompt again, from the prefix cache | 2.0 s | 2.1 s | 5.4 s |
-| server up after, first launch of a setup | 519 s | 354 s | |
-| server up after, later launches | 213 s | 233 s | 217 s |
-| hot expert slots at the first lend | 884 | 212 | 215 |
-| NLL, served | 0.7153 | 0.7180 | 0.7167 |
-| NLL, served minus reference | -0.0032 (SE 0.0044) | -0.0006 (SE 0.0036) | -0.0018 (SE 0.0048) |
+| decode, Japanese prose, median of four prompts | 58.2 tok/s | 40.6 tok/s | 22.0 tok/s |
+| prefill, 35,000 tokens | 19.7 s (1,780 tok/s) | 27.2 s (1,289 tok/s) | 42.3 s (827 tok/s) |
+| the same prompt again, from the prefix cache | 2.0 s | 2.1 s | 5.9 s |
+| server up after | 198 s | 208 s | 193 s |
+| hot expert slots at the first lend | 868 | 206 | 221 |
+| NLL, served | 0.7191 | 0.7187 | 0.7181 |
+| NLL, served minus reference | +0.0006 (SE 0.0040) | +0.0001 (SE 0.0032) | -0.0004 (SE 0.0032) |
 
 - The three reports are in [reports/](reports/).
-- The first launch of a setup compiles kernels and measures the prefill plan.
+- The server-up times are of launches after the first.
+- The first launch of a setup also compiles kernels and measures the prefill plan.
 - The prefill prompt is 35,000 token ids drawn at random.
-  A later launch of the same setup measured 19.2 s on two GPUs.
 - Each decode reply is 1,024 tokens.
 - The NLL is over 24 public-domain texts, against the scores of the checkpoint's own `inference/model.py` (`tools/ref-nll.py`).
 - The reference's mean NLL is 0.7185.
@@ -115,12 +114,12 @@ Decode by kind of text:
 
 | text | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| Chinese prose | 50.6 tok/s | 35.1 tok/s | 21.0 tok/s |
-| English prose | 45.3 tok/s | 33.9 tok/s | 18.9 tok/s |
-| English technical prose | 40.1 tok/s | 32.2 tok/s | 16.4 tok/s |
-| math | 44.4 tok/s | 33.9 tok/s | 19.0 tok/s |
-| JSON | 43.4 tok/s | 32.8 tok/s | 17.9 tok/s |
-| Python code | 40.2 tok/s | 31.7 tok/s | 16.1 tok/s |
+| Chinese prose | 51.3 tok/s | 35.9 tok/s | 19.5 tok/s |
+| English prose | 47.5 tok/s | 34.4 tok/s | 18.2 tok/s |
+| English technical prose | 41.7 tok/s | 33.3 tok/s | 16.2 tok/s |
+| math | 45.8 tok/s | 34.4 tok/s | 18.8 tok/s |
+| JSON | 45.2 tok/s | 33.4 tok/s | 17.3 tok/s |
+| Python code | 41.2 tok/s | 32.5 tok/s | 15.5 tok/s |
 
 - The hot experts on the GPU are swapped for the ones the text being written routes to most.
 - Code, JSON, math and English spread their routes over more experts than Japanese prose, so the CPU computes more of them.
@@ -132,10 +131,10 @@ No prompt shares a prefix with the one before it.
 
 | prompt | two GPUs | one GPU, both sockets | one GPU, one socket |
 |---|---|---|---|
-| 65,536 tokens | 32.3 s (2,028 tok/s) | 48.3 s (1,357 tok/s) | 85.6 s (766 tok/s) |
-| 131,072 tokens | 63.3 s (2,071 tok/s) | 91.5 s (1,432 tok/s) | 155.5 s (843 tok/s) |
-| 524,288 tokens | 213.3 s (2,458 tok/s) | 345.5 s (1,517 tok/s) | 586.1 s (895 tok/s) |
-| 1,000,000 tokens | 450.2 s (2,221 tok/s) | 693.8 s (1,441 tok/s) | 1,160.8 s (861 tok/s) |
+| 65,536 tokens | 31.2 s (2,098 tok/s) | 44.0 s (1,489 tok/s) | 74.1 s (885 tok/s) |
+| 131,072 tokens | 62.1 s (2,112 tok/s) | 91.9 s (1,427 tok/s) | 144.6 s (907 tok/s) |
+| 524,288 tokens | 219.5 s (2,389 tok/s) | 351.8 s (1,490 tok/s) | 568.8 s (922 tok/s) |
+| 1,000,000 tokens | 450.9 s (2,218 tok/s) | 713.7 s (1,401 tok/s) | 1,196.5 s (836 tok/s) |
 
 ### Prefill and the drive
 

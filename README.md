@@ -66,7 +66,9 @@ Thinking is off unless a request sets `"chat_template_kwargs": {"thinking": true
 - An NVIDIA GPU of 16 GB, SM120 (RTX 50).
   SM89 (RTX 40) is selected by `03-sm89-attention` but has not been run with this repository.
 - 512 GB of RAM.
-  The server uses about 350 GiB (with 1-byte E8M0 scale arenas and 2/4-bit packed scale DMA; about 420 GiB with older prebuilt kt-kernel wheels).
+  The server uses 333 GiB at its peak on two GPUs, measured over one run of `tools/qualify.sh`.
+  That is with the 1-byte E8M0 scale arenas and the 2/4-bit packed scale DMA.
+  The prebuilt archive of tag `2026-11-14-1514`, which has neither, used 385 GiB in the same run.
   With 256 GB the experts that do not fit are read from the drive ([docs/requirements.md](docs/requirements.md#with-256-gb)).
 - An x86-64 CPU with AVX2.
 - The checkpoint (476 GiB) on an NVMe drive.

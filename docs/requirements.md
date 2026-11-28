@@ -8,7 +8,9 @@ The rest of the GPU memory is working room, and each use of it shrinks when ther
 ## RAM
 
 - A 512 GB class machine.
-- The server uses about 350 GiB (with 1-byte E8M0 scale arenas and 2/4-bit packed scale DMA; about 420 GiB with older prebuilt kt-kernel wheels).
+- The server uses 333 GiB at its peak on two GPUs, measured over one run of `tools/qualify.sh`.
+- That is with the 1-byte E8M0 scale arenas and the 2/4-bit packed scale DMA.
+- The prebuilt archive of tag `2026-11-14-1514`, which has neither, used 385 GiB in the same run.
 - Most of it is the MXFP4 CPU experts on 2 MB pages.
 - The prefix cache's copy in host memory adds about 5 GiB a GPU.
 - Yuzuri makes one expert pool per NUMA node and uses every physical core.
